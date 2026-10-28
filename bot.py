@@ -113,49 +113,41 @@ import subprocess
 AUTOSTART_TASK_NAME = "CardBot - AutoStart"
 AUTOSTART_PS_SCRIPT_PATH = r"C:\CardBot\toggle_autostart_task.ps1"
 
-def _autostart_powershell():
-    """Run a fixed local helper; never invoke user input through a shell string."""
-    try:
-        result = subprocess.run(
-            ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", AUTOSTART_PS_SCRIPT_PATH],
-            capture_output=True, text=True, timeout=20, check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        logging.warning("Windows auto-start helper failed: %s", type(exc).__name__)
-        return False, "Не удалось выполнить команду управления автозапуском Windows."
-    if result.returncode != 0:
-        logging.warning("Windows auto-start helper exited with code %s", result.returncode)
-        return False, "Windows не подтвердила изменение автозапуска. Проверь C:\\CardBot\\autostart_task.log."
-    return True, (result.stdout or '').strip()
 
 def is_autostart_enabled():
-    """Report actual task enabled state, not an old registry value."""
+    """Read the actual enabled flag from the named per-user scheduled task."""
+    script = (
+        "$t = Get-ScheduledTask -TaskName 'CardBot - AutoStart' -ErrorAction SilentlyContinue; "
+        "if ($null -eq $t) { exit 3 }; "
+        "if ([string]$t.State -eq 'Disabled') { exit 1 }; "
+        "if ($t.Settings.Enabled) { exit 0 }; exit 1"
+    )
     try:
         result = subprocess.run(
-            ["schtasks.exe", "/Query", "/TN", AUTOSTART_TASK_NAME, "/FO", "LIST", "/V"],
+            ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
             capture_output=True, text=True, timeout=10, check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
         return False
-    if result.returncode != 0:
-        return False
-    lines = (result.stdout or '').splitlines()
-    for line in lines:
-        if 'status' in line.lower() or 'состояние' in line.lower():
-            value = line.split(':', 1)[-1].strip().lower()
-            if 'disabled' in value or 'отключено' in value:
-                return False
-            if 'ready' in value or 'готово' in value or 'enabled' in value or 'включено' in value:
-                return True
-    # Query returned a task, but its enabled state is not represented in a known locale.
     return result.returncode == 0
 
+
 def toggle_autostart():
-    """Toggle one named per-user scheduled task through the local helper."""
+    """Toggle one fixed scheduled task; no user-supplied command reaches PowerShell."""
     before = is_autostart_enabled()
-    ok, output = _autostart_powershell()
-    if not ok:
-        return before, output
+    try:
+        result = subprocess.run(
+            ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive",
+             "-ExecutionPolicy", "Bypass", "-File", AUTOSTART_PS_SCRIPT_PATH],
+            capture_output=True, text=True, timeout=20, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        logging.warning("Windows auto-start helper failed: %s", type(exc).__name__)
+        return before, "Не удалось выполнить команду управления автозапуском Windows."
+    if result.returncode != 0:
+        logging.warning("Windows auto-start helper exited with code %s", result.returncode)
+        detail = (result.stderr or "").strip().splitlines()
+        return before, "Windows не подтвердила изменение автозапуска. " + (detail[-1][:250] if detail else "Проверь autostart_task.log.")
     after = is_autostart_enabled()
     if after == before:
         return after, "Windows не подтвердила переключение автозапуска. Проверь Планировщик заданий."
