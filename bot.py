@@ -904,28 +904,16 @@ def funpay_check_unread_chats():
             else:
                 input_kind = "chat_trade_url"
                 input_error = None
+                # This product accepts the trade URL only as ordinary text in the
+                # FunPay chat. Do not download or validate attachments as files.
                 if trade_url:
-                    pass  # Prefer a valid URL sent directly in the FunPay chat.
-                elif has_file:
-                    if not attachment_href:
-                        input_error = (
-                            "В чате FunPay есть вложение, но не удалось безопасно определить ссылку на файл. "
-                            "Поддерживаются небольшие текстовые файлы, прикреплённые непосредственно к чату."
-                        )
-                    else:
-                        input_text, input_error = download_funpay_text_attachment(
-                            s, attachment_href, chat_page_url
-                        )
-                        input_kind = "text_file"
-                        if input_text:
-                            trade_url = extract_steam_trade_url(input_text)
-                            if not trade_url:
-                                input_error = (
-                                    "Текстовый файл прочитан, но в нём нет ровно одной корректной "
-                                    "Steam trade-ссылки."
-                                )
+                    pass
                 elif contains_trade_url:
                     input_error = "В сообщении есть похожая на Steam trade-ссылку строка, но формат ссылки некорректен."
+                elif has_file:
+                    # A file attachment is not an accepted input path; make this
+                    # clear without treating it as a failed text URL download.
+                    input_error = "Отправь Steam trade-ссылку обычным текстовым сообщением прямо в чате FunPay. Файлы не поддерживаются."
 
                 if trade_url:
                     input_record, input_result, detail = record_funpay_buyer_input(
