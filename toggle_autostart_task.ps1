@@ -12,13 +12,7 @@ function Write-TaskLog([string]$Message) {
     } catch { }
 }
 
-try {
-    try { $locked = $mutex.WaitOne(0) }
-    catch [System.Threading.AbandonedMutexException] { $locked = $true }
-    if (-not $locked) { throw 'Переключение автозапуска уже выполняется.' }
-
-    # Remove only the obsolete per-user Run value so the legacy and task-based
-    # mechanisms cannot launch start.bat twice on the next logon.
+function Remove-LegacyAutostartValue {
     $runPath = 'Software\Microsoft\Windows\CurrentVersion\Run'
     $runKey = $null
     try {
@@ -29,6 +23,12 @@ try {
     } finally {
         if ($null -ne $runKey) { $runKey.Dispose() }
     }
+}
+
+try {
+    try { $locked = $mutex.WaitOne(0) }
+    catch [System.Threading.AbandonedMutexException] { $locked = $true }
+    if (-not $locked) { throw 'Переключение автозапуска уже выполняется.' }
 
     $existing = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
     if ($null -eq $existing -or $existing.State -eq 'Disabled') {
@@ -41,13 +41,23 @@ try {
         $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero)
         $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
         Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description 'Starts Steam Card Bot on user logon.' -Force | Out-Null
-        Write-TaskLog 'Auto-start task enabled.'
-        Write-Output 'ENABLED'
+        $operation = 'ENABLED'
     } else {
         Disable-ScheduledTask -TaskName $taskName -ErrorAction Stop | Out-Null
-        Write-TaskLog 'Auto-start task disabled.'
-        Write-Output 'DISABLED'
+        $operation = 'DISABLED'
     }
+
+    # Change legacy settings only after the new task operation succeeded.
+    $legacyClean = $true
+    try {
+        Remove-LegacyAutostartValue
+    } catch {
+        $legacyClean = $false
+        Write-TaskLog ("WARNING: task toggled to $operation but legacy Run value could not be removed: " + $_.Exception.Message)
+    }
+    Write-TaskLog "Auto-start task changed to $operation."
+    if ($legacyClean) { Write-Output $operation }
+    else { Write-Output ($operation + '_LEGACY_ENTRY_REMAINS') }
 } catch {
     Write-TaskLog ("ERROR: " + $_.Exception.Message)
     [Console]::Error.WriteLine($_.Exception.Message)
