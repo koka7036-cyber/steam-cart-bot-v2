@@ -8,7 +8,10 @@ import base64
 import random
 import string
 import tempfile
-import winreg
+try:
+    import winreg  # Windows-only; not used by the Linux runtime.
+except ImportError:
+    winreg = None
 import threading
 import urllib.parse
 import requests
@@ -217,7 +220,9 @@ def _ensure_autostart_helper():
 
 
 def is_autostart_enabled():
-    """Read the task's Enabled flag from Task Scheduler, not its runtime state."""
+    """Read Windows Task Scheduler state; Linux services are managed by the host."""
+    if os.name != "nt":
+        return False
     script = (
         "$t = Get-ScheduledTask -TaskName 'CardBot - AutoStart' -ErrorAction SilentlyContinue; "
         "if ($null -ne $t) { if ($t.Settings.Enabled) { exit 0 }; exit 1 }; "
@@ -237,7 +242,9 @@ def is_autostart_enabled():
 
 
 def toggle_autostart():
-    """Toggle one fixed scheduled task; no user-supplied command reaches PowerShell."""
+    """Toggle Windows autostart; on Linux the hosting service manages restarts."""
+    if os.name != "nt":
+        return False, "Автозапуск управляется сервером Linux, а не настройками Windows."
     before = is_autostart_enabled()
     if not _ensure_autostart_helper():
         return before, "Не найден файл управления автозапуском, и не удалось создать его. Проверь права доступа к C:\\CardBot."
@@ -2407,23 +2414,49 @@ def handle_all_messages(message):
                 parse_mode="Markdown"
             )
 def acquire_python_instance_mutex():
-    # This guard also covers direct "py bot.py" launches, outside start.bat.
-    import ctypes
+    """Prevent two polling instances on both Windows and Linux."""
+    if os.name == "nt":
+        import ctypes
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        create_mutex = kernel32.CreateMutexW
+        create_mutex.argtypes = [ctypes.c_void_p, ctypes.c_bool, ctypes.c_wchar_p]
+        create_mutex.restype = ctypes.c_void_p
+        kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+        kernel32.CloseHandle.restype = ctypes.c_bool
+        ctypes.set_last_error(0)
+        handle = create_mutex(None, True, "Local\\CardBotPythonTelegramPolling")
+        if not handle:
+            raise ctypes.WinError(ctypes.get_last_error())
+        if ctypes.get_last_error() == 183:
+            kernel32.CloseHandle(handle)
+            return None
+        return ("windows", handle)
 
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    create_mutex = kernel32.CreateMutexW
-    create_mutex.argtypes = [ctypes.c_void_p, ctypes.c_bool, ctypes.c_wchar_p]
-    create_mutex.restype = ctypes.c_void_p
-    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
-    kernel32.CloseHandle.restype = ctypes.c_bool
-    ctypes.set_last_error(0)
-    handle = create_mutex(None, True, "Local\\CardBotPythonTelegramPolling")
-    if not handle:
-        raise ctypes.WinError(ctypes.get_last_error())
-    if ctypes.get_last_error() == 183:  # ERROR_ALREADY_EXISTS
-        kernel32.CloseHandle(handle)
+    import fcntl
+    lock_path = os.path.join(tempfile.gettempdir(), "cardbot-telegram-polling.lock")
+    handle = open(lock_path, "a+", encoding="utf-8")
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        handle.close()
         return None
-    return handle
+    return ("linux", handle)
+
+
+def release_python_instance_mutex(lock):
+    if not lock:
+        return
+    kind, handle = lock
+    if kind == "windows":
+        import ctypes
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+        kernel32.CloseHandle.restype = ctypes.c_bool
+        kernel32.CloseHandle(handle)
+    else:
+        import fcntl
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        handle.close()
 
 
 _instance_mutex = acquire_python_instance_mutex()
@@ -2436,8 +2469,4 @@ try:
     start_playerok_monitor()
     bot.infinity_polling()
 finally:
-    import ctypes
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
-    kernel32.CloseHandle.restype = ctypes.c_bool
-    kernel32.CloseHandle(_instance_mutex)
+    release_python_instance_mutex(_instance_mutex)
