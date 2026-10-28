@@ -15,7 +15,7 @@
 1. Скачай ZIP этой ветки и распакуй всю папку в постоянное место.
 2. Установи Python 3.11 или новее с официального сайта Python, включив Python Launcher.
 3. Открой PowerShell в папке бота и выполни:
-   `powershell -ExecutionPolicy Bypass -File .\\setup_windows.ps1`
+   `powershell -ExecutionPolicy Bypass -File .\setup_windows.ps1`
 4. Скрипт установит библиотеки и запросит Telegram Bot Token, SteamID64, логин и пароль Steam. Значения сохраняются в переменных среды текущего пользователя Windows, а не в файлах проекта.
 5. Настрой ASF отдельно и проверь, что он запускается и доступен по адресу IPC, настроенному в `bot.py`. Не включай продажи, пока не проверены авторизация и склад.
 6. Запусти `start.bat`.
