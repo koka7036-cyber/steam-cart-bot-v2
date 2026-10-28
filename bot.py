@@ -113,6 +113,86 @@ import subprocess
 AUTOSTART_TASK_NAME = "CardBot - AutoStart"
 AUTOSTART_PS_SCRIPT_PATH = r"C:\CardBot\toggle_autostart_task.ps1"
 
+# Bootstrap fallback: older deployed updaters may update bot.py before they know
+# to deploy the helper file. Create the same fixed helper locally when needed.
+_AUTOSTART_HELPER_FALLBACK = r"""$ErrorActionPreference = 'Stop'
+$taskName = 'CardBot - AutoStart'
+$startFile = 'C:\CardBot\start.bat'
+$logFile = 'C:\CardBot\autostart_task.log'
+$mutexName = 'Global\CardBotAutoStartTaskToggle'
+$mutex = New-Object System.Threading.Mutex($false, $mutexName)
+$locked = $false
+
+function Write-TaskLog([string]$Message) {
+    try {
+        Add-Content -LiteralPath $logFile -Encoding UTF8 -Value ("{0} {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Message)
+    } catch { }
+}
+
+function Remove-LegacyAutostartValue {
+    $runPath = 'Software\Microsoft\Windows\CurrentVersion\Run'
+    $runKey = $null
+    try {
+        $runKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($runPath, $true)
+        if ($null -ne $runKey) { $runKey.DeleteValue('CardBotFarmAutostart', $false) }
+    } finally {
+        if ($null -ne $runKey) { $runKey.Dispose() }
+    }
+}
+
+try {
+    try { $locked = $mutex.WaitOne(0) }
+    catch [System.Threading.AbandonedMutexException] { $locked = $true }
+    if (-not $locked) { throw 'Переключение автозапуска уже выполняется.' }
+
+    $existing = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+    if ($null -eq $existing -or $existing.State -eq 'Disabled') {
+        if (-not (Test-Path -LiteralPath $startFile -PathType Leaf)) { throw 'Не найден C:\CardBot\start.bat; задача не изменена.' }
+        $user = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+        $action = New-ScheduledTaskAction -Execute (Join-Path $env:WINDIR 'System32\cmd.exe') -Argument ('/d /c ""' + $startFile + '""') -WorkingDirectory 'C:\CardBot'
+        $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
+        $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero)
+        $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
+        Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description 'Starts Steam Card Bot on user logon.' -Force | Out-Null
+        $operation = 'ENABLED'
+    } else {
+        Disable-ScheduledTask -TaskName $taskName -ErrorAction Stop | Out-Null
+        $operation = 'DISABLED'
+    }
+
+    $legacyClean = $true
+    try { Remove-LegacyAutostartValue }
+    catch {
+        $legacyClean = $false
+        Write-TaskLog ("WARNING: task toggled to $operation but legacy Run value could not be removed: " + $_.Exception.Message)
+    }
+    Write-TaskLog "Auto-start task changed to $operation."
+    if ($legacyClean) { Write-Output $operation }
+    else { Write-Output ($operation + '_LEGACY_ENTRY_REMAINS') }
+} catch {
+    Write-TaskLog ("ERROR: " + $_.Exception.Message)
+    [Console]::Error.WriteLine($_.Exception.Message)
+    exit 1
+} finally {
+    if ($locked) { $mutex.ReleaseMutex() }
+    $mutex.Dispose()
+}
+"""
+
+def _ensure_autostart_helper():
+    """Write the fixed helper only when the updater has not deployed it yet."""
+    if os.path.isfile(AUTOSTART_PS_SCRIPT_PATH):
+        return True
+    try:
+        os.makedirs(os.path.dirname(AUTOSTART_PS_SCRIPT_PATH), exist_ok=True)
+        with open(AUTOSTART_PS_SCRIPT_PATH, "w", encoding="utf-8-sig", newline="\r\n") as helper_file:
+            helper_file.write(_AUTOSTART_HELPER_FALLBACK)
+        logging.info("Bootstrapped Windows auto-start helper at %s", AUTOSTART_PS_SCRIPT_PATH)
+        return True
+    except OSError as exc:
+        logging.warning("Could not bootstrap Windows auto-start helper: %s", type(exc).__name__)
+        return False
+
 
 def is_autostart_enabled():
     """Read the task's Enabled flag from Task Scheduler, not its runtime state."""
@@ -134,6 +214,8 @@ def is_autostart_enabled():
 def toggle_autostart():
     """Toggle one fixed scheduled task; no user-supplied command reaches PowerShell."""
     before = is_autostart_enabled()
+    if not _ensure_autostart_helper():
+        return before, "Не найден файл управления автозапуском, и не удалось создать его. Проверь права доступа к C:\\CardBot."
     try:
         result = subprocess.run(
             ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive",
