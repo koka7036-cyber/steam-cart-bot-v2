@@ -437,17 +437,15 @@ def load_funpay_orders():
 def get_funpay_delivery_policy():
     """Use only ordinary Steam trade URL text sent in the FunPay chat."""
     cfg = load_json(FP_CONFIG_FILE, {})
-    mode = str(cfg.get("delivery_input_mode", "chat_only")).lower()
-    # Legacy values are normalized in memory as well as persisted by migration.
     return {
-        "input_mode": "chat_only" if mode != "chat_only" else mode,
+        "input_mode": "chat_only",
         "allow_chat_trade_url": cfg.get("allow_chat_trade_url", True) is True,
         "auto_delivery": cfg.get("auto_delivery_funpay", False) is True,
     }
 
 
 def migrate_funpay_delivery_config():
-    """Migrate the custom input path to chat-only, without changing delivery switches."""
+    """Enable the custom chat-based workflow, without touching FunPay's own site toggle."""
     cfg = load_json(FP_CONFIG_FILE, {})
     changed = False
     if cfg.get("delivery_input_mode") != "chat_only":
@@ -455,6 +453,11 @@ def migrate_funpay_delivery_config():
         changed = True
     if cfg.get("allow_chat_trade_url") is not True:
         cfg["allow_chat_trade_url"] = True
+        changed = True
+    # This is the bot's own delivery switch in funpay_config.json, not FunPay's
+    # built-in automatic-delivery setting on the marketplace.
+    if cfg.get("auto_delivery_funpay") is not True:
+        cfg["auto_delivery_funpay"] = True
         changed = True
     if int(cfg.get("funpay_workflow_version", 0) or 0) < 3:
         cfg["funpay_workflow_version"] = 3
