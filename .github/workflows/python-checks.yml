@@ -4,7 +4,7 @@ on:
   pull_request:
     branches: [main]
   push:
-    branches: [main, "feature/**", "telegram-controlled-windows-autostart"]
+    branches: [main, "feature/**", "telegram-controlled-windows-autostart", "rebuild/deploy-ready"]
 
 permissions:
   contents: read
