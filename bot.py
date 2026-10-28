@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from runtime_paths import resolve_runtime_paths
 import re
 import html
 import json
@@ -22,9 +23,7 @@ from telebot import types
 
 # --- КОНФИГУРАЦИЯ ---
 # Resolve runtime files from this script's folder, never from the caller's current directory.
-BASE_DIR = Path(__file__).resolve().parent
-DATA_DIR = Path(os.getenv("CARD_BOT_DATA_DIR", str(BASE_DIR))).expanduser().resolve()
-DATA_DIR.mkdir(parents=True, exist_ok=True)
+BASE_DIR, DATA_DIR = resolve_runtime_paths(__file__, os.getenv("CARD_BOT_DATA_DIR"))
 
 TG_TOKEN = os.getenv("TG_TOKEN", "")
 STEAM_ID = os.getenv("STEAM_ID", "")
