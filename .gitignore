@@ -218,3 +218,18 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Steam Card Bot runtime data and credentials — never commit these
+.env
+.env.*
+vouchers.json
+inventory_cache.json
+steam_session.json
+funpay_config.json
+funpay_orders.json
+playerok_orders.json
+bot_errors.log
+autostart_task.log
+auto_update.log
+auto_update_commit.txt
+requirements.installed.txt
