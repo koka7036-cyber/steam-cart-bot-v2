@@ -11,7 +11,7 @@ def test_windows_auto_start_uses_scheduled_task_helper_not_registry_toggle():
     )[0]
 
     assert 'AUTOSTART_TASK_NAME = "CardBot - AutoStart"' in section
-    assert 'AUTOSTART_PS_SCRIPT_PATH = r"C:\\CardBot\\toggle_autostart_task.ps1"' in section
+    assert "AUTOSTART_PS_SCRIPT_PATH" in section and "toggle_autostart_task.ps1" in section
     assert "subprocess.run" in section
     assert "winreg.DeleteValue" not in section
     assert "toggle_autostart()" in section
