@@ -435,24 +435,32 @@ def load_funpay_orders():
 
 
 def get_funpay_delivery_policy():
-    """Read the explicit, locally persisted FunPay delivery settings."""
+    """Use only ordinary Steam trade URL text sent in the FunPay chat."""
     cfg = load_json(FP_CONFIG_FILE, {})
+    mode = str(cfg.get("delivery_input_mode", "chat_only")).lower()
+    # Legacy values are normalized in memory as well as persisted by migration.
     return {
-        "input_mode": str(cfg.get("delivery_input_mode", "chat_only")).lower(),
+        "input_mode": "chat_only" if mode != "chat_only" else mode,
         "allow_chat_trade_url": cfg.get("allow_chat_trade_url", True) is True,
         "auto_delivery": cfg.get("auto_delivery_funpay", False) is True,
     }
 
 
 def migrate_funpay_delivery_config():
-    """Set chat-only input. Do not switch FunPay's own built-in delivery toggle."""
+    """Migrate the custom input path to chat-only, without changing delivery switches."""
     cfg = load_json(FP_CONFIG_FILE, {})
-    cfg["delivery_input_mode"] = "chat_only"
-    cfg["allow_chat_trade_url"] = True
-    # Explicitly do NOT set auto_delivery_funpay here. That flag belongs to this
-    # custom workflow; delivery still respects an existing administrator setting.
-    cfg["funpay_workflow_version"] = max(int(cfg.get("funpay_workflow_version", 0)), 3)
-    save_json(FP_CONFIG_FILE, cfg)
+    changed = False
+    if cfg.get("delivery_input_mode") != "chat_only":
+        cfg["delivery_input_mode"] = "chat_only"
+        changed = True
+    if cfg.get("allow_chat_trade_url") is not True:
+        cfg["allow_chat_trade_url"] = True
+        changed = True
+    if int(cfg.get("funpay_workflow_version", 0) or 0) < 3:
+        cfg["funpay_workflow_version"] = 3
+        changed = True
+    if changed:
+        save_json(FP_CONFIG_FILE, cfg)
 
 
 def recover_interrupted_funpay_deliveries():
