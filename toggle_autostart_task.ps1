@@ -17,6 +17,19 @@ try {
     catch [System.Threading.AbandonedMutexException] { $locked = $true }
     if (-not $locked) { throw 'Переключение автозапуска уже выполняется.' }
 
+    # Remove only the obsolete per-user Run value so the legacy and task-based
+    # mechanisms cannot launch start.bat twice on the next logon.
+    $runPath = 'Software\Microsoft\Windows\CurrentVersion\Run'
+    $runKey = $null
+    try {
+        $runKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($runPath, $true)
+        if ($null -ne $runKey) {
+            $runKey.DeleteValue('CardBotFarmAutostart', $false)
+        }
+    } finally {
+        if ($null -ne $runKey) { $runKey.Dispose() }
+    }
+
     $existing = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
     if ($null -eq $existing -or $existing.State -eq 'Disabled') {
         if (-not (Test-Path -LiteralPath $startFile -PathType Leaf)) {
