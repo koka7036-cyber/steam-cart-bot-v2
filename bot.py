@@ -32,7 +32,7 @@ STEAM_LOGIN = os.getenv("STEAM_LOGIN", "")
 STEAM_PASSWORD = os.getenv("STEAM_PASSWORD", "")
 ASF_IPC_URL = "http://127.0.0.1:1242/Api/Command"
 
-BAT_PATH = r"C:\CardBot\start.bat"
+BAT_PATH = str(BASE_DIR / "start.bat")
 REG_RUN_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
 REG_APP_NAME = "CardBotFarmAutostart"
 
@@ -120,14 +120,14 @@ bot.edit_message_text = _edit_message_with_plain_text_fallback
 import subprocess
 
 AUTOSTART_TASK_NAME = "CardBot - AutoStart"
-AUTOSTART_PS_SCRIPT_PATH = r"C:\CardBot\toggle_autostart_task.ps1"
+AUTOSTART_PS_SCRIPT_PATH = str(BASE_DIR / "toggle_autostart_task.ps1")
 
 # Bootstrap fallback: older deployed updaters may update bot.py before they know
 # to deploy the helper file. Create the same fixed helper locally when needed.
 _AUTOSTART_HELPER_FALLBACK = r"""$ErrorActionPreference = 'Stop'
 $taskName = 'CardBot - AutoStart'
-$startFile = 'C:\CardBot\start.bat'
-$logFile = 'C:\CardBot\autostart_task.log'
+$startFile = Join-Path $PSScriptRoot 'start.bat'
+$logFile = Join-Path $PSScriptRoot 'autostart_task.log'
 $mutexName = 'Global\CardBotAutoStartTaskToggle'
 $mutex = New-Object System.Threading.Mutex($false, $mutexName)
 $locked = $false
@@ -176,10 +176,10 @@ try {
         $operation = 'DISABLED'
     } elseif ($null -eq $existing -or $existing.State -eq 'Disabled') {
         if (-not (Test-Path -LiteralPath $startFile -PathType Leaf)) {
-            throw 'Не найден C:\CardBot\start.bat; задача не изменена.'
+            throw ('Не найден файл запуска: ' + $startFile + '; задача не изменена.')
         }
         $user = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-        $action = New-ScheduledTaskAction -Execute (Join-Path $env:WINDIR 'System32\cmd.exe') -Argument ('/d /c ""' + $startFile + '""') -WorkingDirectory 'C:\CardBot'
+        $action = New-ScheduledTaskAction -Execute (Join-Path $env:WINDIR 'System32\cmd.exe') -Argument ('/d /c ""' + $startFile + '""') -WorkingDirectory $PSScriptRoot
         $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
         $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero)
         $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
@@ -253,7 +253,7 @@ def toggle_autostart():
         return False, "Автозапуск управляется сервером Linux, а не настройками Windows."
     before = is_autostart_enabled()
     if not _ensure_autostart_helper():
-        return before, "Не найден файл управления автозапуском, и не удалось создать его. Проверь права доступа к C:\\CardBot."
+        return before, "Не найден файл управления автозапуском, и не удалось создать его. Проверь права доступа к папке бота."
     try:
         result = subprocess.run(
             ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive",
@@ -273,7 +273,7 @@ def toggle_autostart():
     output = (result.stdout or "").strip()
     if "LEGACY_ENTRY_REMAINS" in output:
         if after:
-            return True, "🟢 Автозапуск Windows включён, но старая запись автозапуска не удалена. Проверь C:\\CardBot\\autostart_task.log."
+            return True, "🟢 Автозапуск Windows включён, но старая запись автозапуска не удалена. Проверь файл autostart_task.log рядом с ботом."
         return False, "🔴 Автозапуск Windows выключен, но старая запись автозапуска не удалена. Проверь C:\\CardBot\\autostart_task.log."
     if after:
         return True, "🟢 Автозапуск Windows включён."
