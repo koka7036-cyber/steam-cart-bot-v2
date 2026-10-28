@@ -12,7 +12,7 @@ try {
 
     if ($held) {
         $exitCode = 0
-        $names = @('TG_TOKEN', 'STEAM_ID', 'STEAM_LOGIN', 'STEAM_PASSWORD')
+        $names = @('TG_TOKEN', 'STEAM_ID', 'STEAM_LOGIN')
         $missing = @()
         foreach ($name in $names) {
             $value = [Environment]::GetEnvironmentVariable($name, 'User')
@@ -30,6 +30,20 @@ try {
             Write-Host "[ERROR] Python Launcher (py.exe) не найден. Установи Python 3.11+ с python.org и включи Python Launcher." -ForegroundColor Red
             $exitCode = 2
         } else {
+            $securePassword = Read-Host 'Пароль Steam (ввод скрыт; не сохраняется в переменных пользователя)' -AsSecureString
+            $passwordPtr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($securePassword)
+            try {
+                $plainPassword = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($passwordPtr)
+                if ([string]::IsNullOrWhiteSpace($plainPassword)) {
+                    Write-Host '[ERROR] Пароль Steam не может быть пустым.' -ForegroundColor Red
+                    $exitCode = 2
+                } else {
+                    [Environment]::SetEnvironmentVariable('STEAM_PASSWORD', $plainPassword, 'Process')
+                }
+            } finally {
+                [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($passwordPtr)
+                $securePassword.Dispose()
+            }
             # Playerok settings are optional. A missing token keeps the monitor disabled.
             $optionalNames = @('PLAYEROK_TOKEN', 'PLAYEROK_USER_AGENT', 'PLAYEROK_ITEM_1_SET_ID', 'PLAYEROK_ITEM_5_SET_ID')
             foreach ($name in $optionalNames) {
@@ -39,9 +53,11 @@ try {
                 }
             }
 
-            Set-Location -LiteralPath $PSScriptRoot
-            & py -3 (Join-Path $PSScriptRoot 'bot.py')
-            $exitCode = $LASTEXITCODE
+            if ($exitCode -ne 2) {
+                Set-Location -LiteralPath $PSScriptRoot
+                & py -3 (Join-Path $PSScriptRoot 'bot.py')
+                $exitCode = $LASTEXITCODE
+            }
         }
     } else {
         Write-Output 'Bot already running; duplicate launch skipped.'
