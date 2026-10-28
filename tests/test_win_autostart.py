@@ -25,3 +25,15 @@ def test_autostart_command_checks_admin_chat_and_user_identity():
 
     assert 'message.chat.id != db.get("admin_id")' in handler
     assert 'message.from_user.id != db.get("admin_id")' in handler
+
+
+def test_task_helper_removes_only_legacy_autostart_registry_value():
+    helper = Path(__file__).resolve().parents[1] / "toggle_autostart_task.ps1"
+    source = helper.read_text(encoding="utf-8")
+
+    assert "Software\\Microsoft\\Windows\\CurrentVersion\\Run" in source
+    assert "CardBotFarmAutostart" in source
+    assert "DeleteValue" in source
+    assert "DeleteSubKey" not in source
+    assert "Register-ScheduledTask" in source
+    assert "Disable-ScheduledTask" in source
