@@ -108,29 +108,51 @@ bot.send_message = _send_message_with_plain_text_fallback
 bot.edit_message_text = _edit_message_with_plain_text_fallback
 
 # --- МОДУЛЬ 1: АВТОЗАПУСК WINDOWS ---
+import subprocess
+
+AUTOSTART_TASK_NAME = "CardBot - AutoStart"
+AUTOSTART_PS_SCRIPT_PATH = r"C:\CardBot\toggle_autostart_task.ps1"
+
+
 def is_autostart_enabled():
+    """Read the task's Enabled flag from Task Scheduler, not its runtime state."""
+    script = (
+        "$t = Get-ScheduledTask -TaskName 'CardBot - AutoStart' -ErrorAction SilentlyContinue; "
+        "if ($null -eq $t) { exit 3 }; "
+        "if ($t.Settings.Enabled) { exit 0 }; exit 1"
+    )
     try:
-        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, REG_RUN_PATH, 0, winreg.KEY_READ)
-        val, _ = winreg.QueryValueEx(key, REG_APP_NAME)
-        winreg.CloseKey(key)
-        return bool(val)
-    except Exception:
+        result = subprocess.run(
+            ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True, text=True, timeout=10, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
         return False
+    return result.returncode == 0
+
 
 def toggle_autostart():
-    enabled = is_autostart_enabled()
+    """Toggle one fixed scheduled task; no user-supplied command reaches PowerShell."""
+    before = is_autostart_enabled()
     try:
-        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, REG_RUN_PATH, 0, winreg.KEY_SET_VALUE)
-        if enabled:
-            winreg.DeleteValue(key, REG_APP_NAME)
-            winreg.CloseKey(key)
-            return False, "🔴 Автозапуск с Windows **ВЫКЛЮЧЕН**."
-        else:
-            winreg.SetValueEx(key, REG_APP_NAME, 0, winreg.REG_SZ, f'"{BAT_PATH}"')
-            winreg.CloseKey(key)
-            return True, "🟢 Автозапуск с Windows **ВКЛЮЧЕН**!"
-    except Exception as e:
-        return enabled, f"❌ Ошибка реестра: {e}"
+        result = subprocess.run(
+            ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive",
+             "-ExecutionPolicy", "Bypass", "-File", AUTOSTART_PS_SCRIPT_PATH],
+            capture_output=True, text=True, timeout=20, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        logging.warning("Windows auto-start helper failed: %s", type(exc).__name__)
+        return before, "Не удалось выполнить команду управления автозапуском Windows."
+    if result.returncode != 0:
+        logging.warning("Windows auto-start helper exited with code %s", result.returncode)
+        detail = (result.stderr or "").strip().splitlines()
+        return before, "Windows не подтвердила изменение автозапуска. " + (detail[-1][:250] if detail else "Проверь autostart_task.log.")
+    after = is_autostart_enabled()
+    if after == before:
+        return after, "Windows не подтвердила переключение автозапуска. Проверь Планировщик заданий."
+    if after:
+        return True, "🟢 Автозапуск Windows включён."
+    return False, "🔴 Автозапуск Windows выключен."
 
 # --- МОДУЛЬ 2: FUNPAY 24/7 + АВТОБОТ ПРОДАЖ ---
 fp_state = {
@@ -1882,10 +1904,10 @@ def customer_help_howto(message):
 @bot.message_handler(func=lambda m: m.text and m.text.startswith("⚙️ Автозапуск Windows:"))
 def handle_toggle_autostart(message):
     db = load_json(DB_FILE, {"admin_id": None, "vouchers": {}})
-    if message.chat.id != db["admin_id"]:
+    if message.chat.id != db.get("admin_id") or message.from_user.id != db.get("admin_id"):
         return
     _, msg = toggle_autostart()
-    bot.send_message(message.chat.id, msg, reply_markup=build_admin_keyboard(), parse_mode="Markdown")
+    bot.send_message(message.chat.id, msg, reply_markup=build_admin_keyboard())
 
 @bot.message_handler(commands=["fp"])
 def set_fp_key(message):

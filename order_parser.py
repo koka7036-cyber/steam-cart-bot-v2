@@ -33,12 +33,14 @@ def detect_order_sets_and_quantity(order_text):
     """Return (sets_per_item, quantity) for supported FunPay card-set listings."""
     text = html.unescape(order_text or "").lower().replace("ё", "е")
     five_set_patterns = (
+        r"\bset\s*5\b",
         r"5\s*(?:полных\s*)?(?:сет(?:а|ов|ы)?|набор(?:а|ов|ы)?)",
         r"(?:пять)\s*(?:полных\s*)?(?:сет(?:а|ов|ы)?|набор(?:а|ов|ы)?)",
         r"25\s*карт",
         r"500\s*xp",
     )
     one_set_patterns = (
+        r"\bset\s*1\b",
         r"1\s*(?:полный\s*)?(?:сет|набор)",
         r"(?:один|одна)\s*(?:полный\s*)?(?:сет|набор)",
         r"5\s*шт\s*=\s*100\s*xp",
