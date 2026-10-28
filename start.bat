@@ -31,7 +31,7 @@ if exist "%CARD_BOT_ASF_DIR%\ArchiSteamFarm.exe" (
 
 :loop
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%BOT_DIR%run_bot.ps1"
-if errorlevel 23 (
+if %ERRORLEVEL% EQU 23 (
     echo [INFO] Бот уже запущен; повторный запуск пропущен.
     exit /b 0
 )
