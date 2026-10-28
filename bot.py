@@ -435,28 +435,35 @@ def load_funpay_orders():
 
 
 def get_funpay_delivery_policy():
-    """Read the explicit, locally persisted FunPay delivery settings."""
+    """Use only ordinary Steam trade URL text sent in the FunPay chat."""
     cfg = load_json(FP_CONFIG_FILE, {})
     return {
-        "input_mode": str(cfg.get("delivery_input_mode", "both")).lower(),
-        "allow_chat_trade_url": cfg.get("allow_chat_trade_url", False) is True,
+        "input_mode": "chat_only",
+        "allow_chat_trade_url": cfg.get("allow_chat_trade_url", True) is True,
         "auto_delivery": cfg.get("auto_delivery_funpay", False) is True,
     }
 
 
 def migrate_funpay_delivery_config():
-    """Apply the seller-approved in-chat workflow once; never enable FunPay built-in auto-delivery."""
+    """Enable the custom chat-based workflow, without touching FunPay's own site toggle."""
     cfg = load_json(FP_CONFIG_FILE, {})
-    if cfg.get("funpay_workflow_version", 0) >= 2:
-        return
-    # The owner explicitly chose the two input methods for this custom bot:
-    # a Steam trade URL in FunPay chat or a small text attachment in that chat.
-    # No external file-hosting URL or Telegram contact is sent to buyers.
-    cfg["delivery_input_mode"] = "both"
-    cfg["allow_chat_trade_url"] = True
-    cfg["auto_delivery_funpay"] = True
-    cfg["funpay_workflow_version"] = 2
-    save_json(FP_CONFIG_FILE, cfg)
+    changed = False
+    if cfg.get("delivery_input_mode") != "chat_only":
+        cfg["delivery_input_mode"] = "chat_only"
+        changed = True
+    if cfg.get("allow_chat_trade_url") is not True:
+        cfg["allow_chat_trade_url"] = True
+        changed = True
+    # This is the bot's own delivery switch in funpay_config.json, not FunPay's
+    # built-in automatic-delivery setting on the marketplace.
+    if cfg.get("auto_delivery_funpay") is not True:
+        cfg["auto_delivery_funpay"] = True
+        changed = True
+    if int(cfg.get("funpay_workflow_version", 0) or 0) < 3:
+        cfg["funpay_workflow_version"] = 3
+        changed = True
+    if changed:
+        save_json(FP_CONFIG_FILE, cfg)
 
 
 def recover_interrupted_funpay_deliveries():
@@ -903,33 +910,21 @@ def funpay_check_unread_chats():
                         f"Покупатель: {sender_name}\n"
                         f"Лот: {sets_per_item} сет. × {order_quantity} шт.\n"
                         f"Резерв: {record.get('status')}.\n"
-                        f"Ожидается Steam trade-ссылка в чате или текстовый файл."
+                        f"Ожидается Steam trade-ссылка обычным текстовым сообщением в чате FunPay."
                     )
             else:
                 input_kind = "chat_trade_url"
                 input_error = None
+                # This product accepts the trade URL only as ordinary text in the
+                # FunPay chat. Do not download or validate attachments as files.
                 if trade_url:
-                    pass  # Prefer a valid URL sent directly in the FunPay chat.
-                elif has_file:
-                    if not attachment_href:
-                        input_error = (
-                            "В чате FunPay есть вложение, но не удалось безопасно определить ссылку на файл. "
-                            "Поддерживаются небольшие текстовые файлы, прикреплённые непосредственно к чату."
-                        )
-                    else:
-                        input_text, input_error = download_funpay_text_attachment(
-                            s, attachment_href, chat_page_url
-                        )
-                        input_kind = "text_file"
-                        if input_text:
-                            trade_url = extract_steam_trade_url(input_text)
-                            if not trade_url:
-                                input_error = (
-                                    "Текстовый файл прочитан, но в нём нет ровно одной корректной "
-                                    "Steam trade-ссылки."
-                                )
+                    pass
                 elif contains_trade_url:
                     input_error = "В сообщении есть похожая на Steam trade-ссылку строка, но формат ссылки некорректен."
+                elif has_file:
+                    # A file attachment is not an accepted input path; make this
+                    # clear without treating it as a failed text URL download.
+                    input_error = "Отправь Steam trade-ссылку обычным текстовым сообщением прямо в чате FunPay. Файлы не поддерживаются."
 
                 if trade_url:
                     input_record, input_result, detail = record_funpay_buyer_input(
