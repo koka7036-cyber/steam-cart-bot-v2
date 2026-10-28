@@ -4,7 +4,7 @@ on:
   pull_request:
     branches: [main]
   push:
-    branches: [main, "feature/**"]
+    branches: [main, "feature/**", "telegram-controlled-windows-autostart"]
 
 permissions:
   contents: read
@@ -34,7 +34,7 @@ jobs:
       - name: Parse Windows deployment scripts
         shell: pwsh
         run: |
-          $files = @('update_bot.ps1', 'run_bot.ps1', 'configure_playerok.ps1', 'install_autostart.ps1')
+          $files = @('update_bot.ps1', 'run_bot.ps1', 'configure_playerok.ps1', 'install_autostart.ps1', 'toggle_autostart_task.ps1')
           foreach ($file in $files) {
             $tokens = $null
             $errors = $null

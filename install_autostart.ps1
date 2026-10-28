@@ -3,7 +3,7 @@ $ErrorActionPreference = 'Stop'
 # Installs a per-user logon task. It does not start the bot immediately.
 $botRoot = 'C:\CardBot'
 $startFile = Join-Path $botRoot 'start.bat'
-$taskName = 'Steam Card Bot - AutoStart'
+$taskName = 'CardBot - AutoStart'
 
 if (-not (Test-Path -LiteralPath $startFile -PathType Leaf)) {
     throw "Не найден $startFile. Сначала установи рабочую версию бота в C:\CardBot."

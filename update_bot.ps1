@@ -4,7 +4,7 @@ $live = 'C:\CardBot'
 $log = Join-Path $live 'auto_update.log'
 $marker = Join-Path $live 'auto_update_commit.txt'
 $requirementsSnapshot = Join-Path $live 'requirements.installed.txt'
-$deployFiles = @('bot.py', 'order_parser.py', 'funpay_orders.py', 'sales_analytics.py', 'playerok_orders.py', 'playerok_monitor.py', 'requirements-playerok.txt', 'configure_playerok.ps1', 'configure_playerok.bat', 'install_autostart.ps1', 'update_bot.ps1', 'run_bot.ps1', 'backup_bot.ps1')
+$deployFiles = @('bot.py', 'order_parser.py', 'funpay_orders.py', 'sales_analytics.py', 'playerok_orders.py', 'playerok_monitor.py', 'requirements-playerok.txt', 'configure_playerok.ps1', 'configure_playerok.bat', 'toggle_autostart_task.ps1', 'install_autostart.ps1', 'update_bot.ps1', 'run_bot.ps1', 'backup_bot.ps1')
 
 function Write-Log([string]$Message) {
     $line = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $Message"
@@ -15,7 +15,6 @@ try {
     if (-not (Test-Path -LiteralPath (Join-Path $repo '.git'))) { throw 'Клон GitHub не найден.' }
     if (-not (Test-Path -LiteralPath (Join-Path $live 'bot.py'))) { throw 'Рабочий bot.py не найден.' }
 
-    # Обновляем только remote-tracking ref. Локальные изменения в клоне не затрагиваем.
     $null = & git -C $repo fetch --quiet origin '+refs/heads/main:refs/remotes/origin/main' 2>&1
     if ($LASTEXITCODE -ne 0) { throw 'Не удалось получить обновления с GitHub. Рабочая версия оставлена без изменений.' }
 
