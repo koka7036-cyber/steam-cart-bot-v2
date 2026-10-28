@@ -274,7 +274,7 @@ def toggle_autostart():
     if "LEGACY_ENTRY_REMAINS" in output:
         if after:
             return True, "🟢 Автозапуск Windows включён, но старая запись автозапуска не удалена. Проверь файл autostart_task.log рядом с ботом."
-        return False, "🔴 Автозапуск Windows выключен, но старая запись автозапуска не удалена. Проверь C:\\CardBot\\autostart_task.log."
+        return False, "🔴 Автозапуск Windows выключен, но старая запись автозапуска не удалена. Проверь файл autostart_task.log рядом с ботом."
     if after:
         return True, "🟢 Автозапуск Windows включён."
     return False, "🔴 Автозапуск Windows выключен."
