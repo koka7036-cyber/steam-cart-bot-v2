@@ -150,6 +150,11 @@ def toggle_autostart():
     after = is_autostart_enabled()
     if after == before:
         return after, "Windows не подтвердила переключение автозапуска. Проверь Планировщик заданий."
+    output = (result.stdout or "").strip()
+    if "LEGACY_ENTRY_REMAINS" in output:
+        if after:
+            return True, "🟢 Автозапуск Windows включён, но старая запись автозапуска не удалена. Проверь C:\\CardBot\\autostart_task.log."
+        return False, "🔴 Автозапуск Windows выключен, но старая запись автозапуска не удалена. Проверь C:\\CardBot\\autostart_task.log."
     if after:
         return True, "🟢 Автозапуск Windows включён."
     return False, "🔴 Автозапуск Windows выключен."
