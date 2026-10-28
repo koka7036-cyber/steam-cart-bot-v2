@@ -22,7 +22,7 @@ jobs:
       - name: Install test runner
         run: python -m pip install --upgrade pip pytest
       - name: Compile Python files
-        run: python -m compileall -q bot.py funpay_orders.py order_parser.py sales_analytics.py playerok_orders.py playerok_monitor.py
+        run: python -m compileall -q bot.py runtime_paths.py funpay_orders.py order_parser.py sales_analytics.py playerok_orders.py playerok_monitor.py
       - name: Run regression tests
         run: python -m pytest -q
 
