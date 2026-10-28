@@ -24,7 +24,10 @@ try {
         }
 
         if ($missing.Count -gt 0) {
-            Write-Error ("Не настроены обязательные переменные Windows: " + ($missing -join ', ') + ". Настрой их перед запуском.")
+            Write-Host ("[ERROR] Не настроены обязательные переменные Windows: " + ($missing -join ', ') + ". Настрой их перед запуском.") -ForegroundColor Red
+            $exitCode = 2
+        } elseif (-not (Get-Command py -ErrorAction SilentlyContinue)) {
+            Write-Host "[ERROR] Python Launcher (py.exe) не найден. Установи Python 3.11+ с python.org и включи Python Launcher." -ForegroundColor Red
             $exitCode = 2
         } else {
             # Playerok settings are optional. A missing token keeps the monitor disabled.
