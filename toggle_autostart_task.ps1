@@ -12,6 +12,19 @@ function Write-TaskLog([string]$Message) {
     } catch { }
 }
 
+function Test-LegacyAutostartValue {
+    $runPath = 'Software\Microsoft\Windows\CurrentVersion\Run'
+    $runKey = $null
+    try {
+        $runKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($runPath, $false)
+        if ($null -eq $runKey) { return $false }
+        $value = $runKey.GetValue('CardBotFarmAutostart', $null)
+        return -not [string]::IsNullOrWhiteSpace([string]$value)
+    } finally {
+        if ($null -ne $runKey) { $runKey.Dispose() }
+    }
+}
+
 function Remove-LegacyAutostartValue {
     $runPath = 'Software\Microsoft\Windows\CurrentVersion\Run'
     $runKey = $null
@@ -31,7 +44,11 @@ try {
     if (-not $locked) { throw 'Переключение автозапуска уже выполняется.' }
 
     $existing = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
-    if ($null -eq $existing -or $existing.State -eq 'Disabled') {
+    $legacyEnabled = Test-LegacyAutostartValue
+    if ($null -eq $existing -and $legacyEnabled) {
+        # Preserve toggle semantics during migration: old autorun is ON, so this click turns it OFF.
+        $operation = 'DISABLED'
+    } elseif ($null -eq $existing -or $existing.State -eq 'Disabled') {
         if (-not (Test-Path -LiteralPath $startFile -PathType Leaf)) {
             throw 'Не найден C:\CardBot\start.bat; задача не изменена.'
         }

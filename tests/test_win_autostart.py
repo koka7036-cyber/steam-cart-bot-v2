@@ -37,3 +37,21 @@ def test_task_helper_removes_only_legacy_autostart_registry_value():
     assert "DeleteSubKey" not in source
     assert "Register-ScheduledTask" in source
     assert "Disable-ScheduledTask" in source
+
+
+def test_status_recognizes_legacy_registry_autostart_when_task_is_missing():
+    source = BOT_SOURCE.read_text(encoding="utf-8")
+    section = source.split("# --- МОДУЛЬ 1: АВТОЗАПУСК WINDOWS ---", 1)[1].split(
+        "# --- МОДУЛЬ 2:", 1
+    )[0]
+
+    assert "CardBotFarmAutostart" in section
+    assert "CurrentVersion\\\\Run" in section
+
+
+def test_task_helper_turns_off_legacy_autostart_before_creating_new_task():
+    helper = Path(__file__).resolve().parents[1] / "toggle_autostart_task.ps1"
+    source = helper.read_text(encoding="utf-8")
+
+    assert "$legacyEnabled" in source
+    assert "$null -eq $existing -and $legacyEnabled" in source
