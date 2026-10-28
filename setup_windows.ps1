@@ -67,7 +67,7 @@ Write-Host 'Сохраняем несекретные настройки и Tele
 Write-Host 'Пароль Steam не сохраняется: при каждом запуске его запросит run_bot.ps1 скрытым вводом.'
 [void](Read-RequiredValue 'Telegram Bot Token (из BotFather)' 'TG_TOKEN' $true)
 $steamId = Read-RequiredValue 'SteamID64 (17 цифр)' 'STEAM_ID'
-if ($steamId -notmatch '^\d{17}
+if ($steamId -notmatch '^\d{17}$') {
     Write-Host '[ОШИБКА] SteamID64 должен состоять из 17 цифр. Перезапусти настройку и введи корректный ID.' -ForegroundColor Red
     exit 2
 }
