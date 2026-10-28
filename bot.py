@@ -438,26 +438,20 @@ def get_funpay_delivery_policy():
     """Read the explicit, locally persisted FunPay delivery settings."""
     cfg = load_json(FP_CONFIG_FILE, {})
     return {
-        "input_mode": str(cfg.get("delivery_input_mode", "both")).lower(),
-        "allow_chat_trade_url": cfg.get("allow_chat_trade_url", False) is True,
+        "input_mode": str(cfg.get("delivery_input_mode", "chat_only")).lower(),
+        "allow_chat_trade_url": cfg.get("allow_chat_trade_url", True) is True,
         "auto_delivery": cfg.get("auto_delivery_funpay", False) is True,
     }
 
 
 def migrate_funpay_delivery_config():
-    """Apply the seller-approved in-chat workflow once; never enable FunPay built-in auto-delivery."""
+    """Migrate custom delivery to text-only input inside the FunPay chat."""
     cfg = load_json(FP_CONFIG_FILE, {})
-    if cfg.get("funpay_workflow_version", 0) >= 2:
-        return
-    # The owner explicitly chose the two input methods for this custom bot:
-    # a Steam trade URL in FunPay chat or a small text attachment in that chat.
-    # No external file-hosting URL or Telegram contact is sent to buyers.
-    cfg["delivery_input_mode"] = "both"
+    # Chat is the sole supported source: never ask buyers to upload a file or use Telegram.
+    cfg["delivery_input_mode"] = "chat_only"
     cfg["allow_chat_trade_url"] = True
-    cfg["auto_delivery_funpay"] = True
-    cfg["funpay_workflow_version"] = 2
+    cfg["funpay_workflow_version"] = max(int(cfg.get("funpay_workflow_version", 0)), 3)
     save_json(FP_CONFIG_FILE, cfg)
-
 
 def recover_interrupted_funpay_deliveries():
     """Quarantine interrupted Steam requests; never retry an ambiguous POST."""
