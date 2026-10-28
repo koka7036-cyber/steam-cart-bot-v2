@@ -115,7 +115,8 @@ AUTOSTART_PS_SCRIPT_PATH = r"C:\CardBot\toggle_autostart_task.ps1"
 
 # Bootstrap fallback: older deployed updaters may update bot.py before they know
 # to deploy the helper file. Create the same fixed helper locally when needed.
-_AUTOSTART_HELPER_FALLBACK = r"""$ErrorActionPreference = 'Stop'
+_AUTOSTART_HELPER_FALLBACK = r"""# CardBot auto-start helper v2 — supports state-preserving migration
+$ErrorActionPreference = 'Stop'
 $taskName = 'CardBot - AutoStart'
 $startFile = 'C:\CardBot\start.bat'
 $logFile = 'C:\CardBot\autostart_task.log'
@@ -155,6 +156,18 @@ function Remove-LegacyAutostartValue {
     }
 }
 
+function Register-AutostartTask {
+    if (-not (Test-Path -LiteralPath $startFile -PathType Leaf)) {
+        throw 'Не найден C:\CardBot\start.bat; задача не изменена.'
+    }
+    $user = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $action = New-ScheduledTaskAction -Execute (Join-Path $env:WINDIR 'System32\cmd.exe') -Argument ('/d /c ""' + $startFile + '""') -WorkingDirectory 'C:\CardBot'
+    $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
+    $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero)
+    $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
+    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description 'Starts Steam Card Bot on user logon.' -Force | Out-Null
+}
+
 try {
     try { $locked = $mutex.WaitOne(0) }
     catch [System.Threading.AbandonedMutexException] { $locked = $true }
@@ -162,34 +175,37 @@ try {
 
     $existing = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
     $legacyEnabled = Test-LegacyAutostartValue
-    if ($null -eq $existing -and $legacyEnabled) {
-        # Preserve toggle semantics during migration: old autorun is ON, so this click turns it OFF.
+    $mode = [Environment]::GetEnvironmentVariable('CARDBOT_AUTOSTART_MODE', 'Process')
+
+    if ($mode -eq 'MIGRATE') {
+        # Preserve the old setting during first launch: old Run ON becomes scheduled task ON.
+        if ($null -eq $existing -and $legacyEnabled) {
+            Register-AutostartTask
+            $operation = 'MIGRATED'
+        } else {
+            $operation = 'UNCHANGED'
+        }
+    } elseif ($null -eq $existing -and $legacyEnabled) {
+        # When migration failed, a manual toggle from old ON should turn auto-start OFF.
         $operation = 'DISABLED'
     } elseif ($null -eq $existing -or $existing.State -eq 'Disabled') {
-        if (-not (Test-Path -LiteralPath $startFile -PathType Leaf)) {
-            throw 'Не найден C:\CardBot\start.bat; задача не изменена.'
-        }
-        $user = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-        $action = New-ScheduledTaskAction -Execute (Join-Path $env:WINDIR 'System32\cmd.exe') -Argument ('/d /c ""' + $startFile + '""') -WorkingDirectory 'C:\CardBot'
-        $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
-        $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero)
-        $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
-        Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description 'Starts Steam Card Bot on user logon.' -Force | Out-Null
+        Register-AutostartTask
         $operation = 'ENABLED'
     } else {
         Disable-ScheduledTask -TaskName $taskName -ErrorAction Stop | Out-Null
         $operation = 'DISABLED'
     }
 
-    # Change legacy settings only after the new task operation succeeded.
+    # Only clean the legacy value after the replacement is registered or the explicit toggle succeeds.
     $legacyClean = $true
     try {
         Remove-LegacyAutostartValue
     } catch {
         $legacyClean = $false
-        Write-TaskLog ("WARNING: task toggled to $operation but legacy Run value could not be removed: " + $_.Exception.Message)
+        Write-TaskLog ("WARNING: task action $operation completed but legacy Run value could not be removed: " + $_.Exception.Message)
     }
-    Write-TaskLog "Auto-start task changed to $operation."
+
+    if ($operation -ne 'UNCHANGED') { Write-TaskLog "Auto-start task changed to $operation." }
     if ($legacyClean) { Write-Output $operation }
     else { Write-Output ($operation + '_LEGACY_ENTRY_REMAINS') }
 } catch {
@@ -201,13 +217,21 @@ try {
     $mutex.Dispose()
 }
 """
+
 def _ensure_autostart_helper():
-    """Write the fixed helper only when the updater has not deployed it yet."""
-    if os.path.isfile(AUTOSTART_PS_SCRIPT_PATH):
-        return True
+    """Install the fixed helper if absent or stale, including during updater bootstrap."""
     try:
+        if os.path.isfile(AUTOSTART_PS_SCRIPT_PATH):
+            try:
+                with open(AUTOSTART_PS_SCRIPT_PATH, "r", encoding="utf-8-sig") as current_helper:
+                    helper_text = current_helper.read()
+                if "# CardBot auto-start helper v2" in helper_text and "CARDBOT_AUTOSTART_MODE" in helper_text:
+                    return True
+            except OSError:
+                pass
+
         os.makedirs(os.path.dirname(AUTOSTART_PS_SCRIPT_PATH), exist_ok=True)
-        with open(AUTOSTART_PS_SCRIPT_PATH, "w", encoding="utf-8-sig", newline="\r\n") as helper_file:
+        with open(AUTOSTART_PS_SCRIPT_PATH, "w", encoding="utf-8-sig", newline="\\r\\n") as helper_file:
             helper_file.write(_AUTOSTART_HELPER_FALLBACK)
         logging.info("Bootstrapped Windows auto-start helper at %s", AUTOSTART_PS_SCRIPT_PATH)
         return True
@@ -217,11 +241,11 @@ def _ensure_autostart_helper():
 
 
 def is_autostart_enabled():
-    """Read the task's Enabled flag from Task Scheduler, not its runtime state."""
+    """Read Task Scheduler state, falling back to the legacy per-user Run entry until migration."""
     script = (
         "$t = Get-ScheduledTask -TaskName 'CardBot - AutoStart' -ErrorAction SilentlyContinue; "
         "if ($null -ne $t) { if ($t.Settings.Enabled) { exit 0 }; exit 1 }; "
-        "$k = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Software\\Microsoft\\Windows\\CurrentVersion\\Run', $false); "
+        "$k = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Run', $false); "
         "if ($null -eq $k) { exit 3 }; "
         "try { $v = $k.GetValue('CardBotFarmAutostart', $null) } finally { $k.Dispose() }; "
         "if (-not [string]::IsNullOrWhiteSpace([string]$v)) { exit 0 }; exit 3"
@@ -240,12 +264,14 @@ def toggle_autostart():
     """Toggle one fixed scheduled task; no user-supplied command reaches PowerShell."""
     before = is_autostart_enabled()
     if not _ensure_autostart_helper():
-        return before, "Не найден файл управления автозапуском, и не удалось создать его. Проверь права доступа к C:\\CardBot."
+        return before, "Не найден файл управления автозапуском, и не удалось создать его. Проверь права доступа к C:\\\\CardBot."
+    helper_env = os.environ.copy()
+    helper_env.pop("CARDBOT_AUTOSTART_MODE", None)
     try:
         result = subprocess.run(
             ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive",
              "-ExecutionPolicy", "Bypass", "-File", AUTOSTART_PS_SCRIPT_PATH],
-            capture_output=True, text=True, timeout=20, check=False,
+            capture_output=True, text=True, timeout=20, check=False, env=helper_env,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         logging.warning("Windows auto-start helper failed: %s", type(exc).__name__)
@@ -260,11 +286,41 @@ def toggle_autostart():
     output = (result.stdout or "").strip()
     if "LEGACY_ENTRY_REMAINS" in output:
         if after:
-            return True, "🟢 Автозапуск Windows включён, но старая запись автозапуска не удалена. Проверь C:\\CardBot\\autostart_task.log."
-        return False, "🔴 Автозапуск Windows выключен, но старая запись автозапуска не удалена. Проверь C:\\CardBot\\autostart_task.log."
+            return True, "🟢 Автозапуск Windows включён, но старая запись автозапуска не удалена. Проверь C:\\\\CardBot\\\\autostart_task.log."
+        return False, "🔴 Автозапуск Windows выключен, но старая запись автозапуска не удалена. Проверь C:\\\\CardBot\\\\autostart_task.log."
     if after:
         return True, "🟢 Автозапуск Windows включён."
     return False, "🔴 Автозапуск Windows выключен."
+
+
+def migrate_autostart_if_needed():
+    """Keep the old ON/OFF setting while migrating it to Task Scheduler on first launch."""
+    if not _ensure_autostart_helper():
+        logging.warning("Legacy auto-start migration skipped because its helper could not be prepared.")
+        return False
+    migration_env = os.environ.copy()
+    migration_env["CARDBOT_AUTOSTART_MODE"] = "MIGRATE"
+    try:
+        result = subprocess.run(
+            ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive",
+             "-ExecutionPolicy", "Bypass", "-File", AUTOSTART_PS_SCRIPT_PATH],
+            capture_output=True, text=True, timeout=20, check=False, env=migration_env,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        logging.warning("Windows auto-start migration could not run: %s", type(exc).__name__)
+        return False
+    if result.returncode != 0:
+        logging.warning("Windows auto-start migration failed; preserving prior registry setting when possible.")
+        return False
+    output = (result.stdout or "").strip()
+    if "MIGRATED" in output:
+        logging.info("Migrated legacy Windows auto-start to Task Scheduler.")
+    elif "LEGACY_ENTRY_REMAINS" in output:
+        logging.warning("Legacy auto-start entry remains; see C:\\CardBot\\autostart_task.log.")
+    return True
+
+
+migrate_autostart_if_needed()
 
 # --- МОДУЛЬ 2: FUNPAY 24/7 + АВТОБОТ ПРОДАЖ ---
 fp_state = {
