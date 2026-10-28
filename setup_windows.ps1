@@ -20,6 +20,16 @@ if ($LASTEXITCODE -ne 0) {
     Write-Host '[ОШИБКА] Python 3 не найден через команду py -3.' -ForegroundColor Red
     exit 2
 }
+if ($versionText -notmatch 'Python\s+(\d+)\.(\d+)') {
+    Write-Host "[ОШИБКА] Не удалось определить версию Python: $versionText" -ForegroundColor Red
+    exit 2
+}
+$pythonMajor = [int]$Matches[1]
+$pythonMinor = [int]$Matches[2]
+if (($pythonMajor -lt 3) -or (($pythonMajor -eq 3) -and ($pythonMinor -lt 11))) {
+    Write-Host "[ОШИБКА] Требуется Python 3.11 или новее; найдено: $versionText" -ForegroundColor Red
+    exit 2
+}
 Write-Host "[OK] $versionText"
 
 Write-Host 'Устанавливаю библиотеки из requirements.txt...'
