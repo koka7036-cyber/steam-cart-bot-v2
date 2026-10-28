@@ -445,13 +445,15 @@ def get_funpay_delivery_policy():
 
 
 def migrate_funpay_delivery_config():
-    """Migrate custom delivery to text-only input inside the FunPay chat."""
+    """Set chat-only input. Do not switch FunPay's own built-in delivery toggle."""
     cfg = load_json(FP_CONFIG_FILE, {})
-    # Chat is the sole supported source: never ask buyers to upload a file or use Telegram.
     cfg["delivery_input_mode"] = "chat_only"
     cfg["allow_chat_trade_url"] = True
+    # Explicitly do NOT set auto_delivery_funpay here. That flag belongs to this
+    # custom workflow; delivery still respects an existing administrator setting.
     cfg["funpay_workflow_version"] = max(int(cfg.get("funpay_workflow_version", 0)), 3)
     save_json(FP_CONFIG_FILE, cfg)
+
 
 def recover_interrupted_funpay_deliveries():
     """Quarantine interrupted Steam requests; never retry an ambiguous POST."""
