@@ -115,11 +115,10 @@ AUTOSTART_PS_SCRIPT_PATH = r"C:\CardBot\toggle_autostart_task.ps1"
 
 
 def is_autostart_enabled():
-    """Read the actual enabled flag from the named per-user scheduled task."""
+    """Read the task's Enabled flag from Task Scheduler, not its runtime state."""
     script = (
         "$t = Get-ScheduledTask -TaskName 'CardBot - AutoStart' -ErrorAction SilentlyContinue; "
         "if ($null -eq $t) { exit 3 }; "
-        "if ([string]$t.State -eq 'Disabled') { exit 1 }; "
         "if ($t.Settings.Enabled) { exit 0 }; exit 1"
     )
     try:
