@@ -35,6 +35,12 @@ if errorlevel 23 (
     echo [INFO] Бот уже запущен; повторный запуск пропущен.
     exit /b 0
 )
+if errorlevel 2 (
+    echo [ERROR] Запуск остановлен из-за отсутствующих настроек или ошибки конфигурации.
+    echo [ERROR] Исправь настройки и запусти start.bat снова.
+    pause
+    exit /b 2
+)
 echo Бот завершился. Повторный запуск через 5 секунд...
 timeout /t 5 /nobreak >nul
 goto loop
