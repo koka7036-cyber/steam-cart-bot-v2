@@ -129,12 +129,27 @@ function Write-TaskLog([string]$Message) {
     } catch { }
 }
 
+function Test-LegacyAutostartValue {
+    $runPath = 'Software\Microsoft\Windows\CurrentVersion\Run'
+    $runKey = $null
+    try {
+        $runKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($runPath, $false)
+        if ($null -eq $runKey) { return $false }
+        $value = $runKey.GetValue('CardBotFarmAutostart', $null)
+        return -not [string]::IsNullOrWhiteSpace([string]$value)
+    } finally {
+        if ($null -ne $runKey) { $runKey.Dispose() }
+    }
+}
+
 function Remove-LegacyAutostartValue {
     $runPath = 'Software\Microsoft\Windows\CurrentVersion\Run'
     $runKey = $null
     try {
         $runKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($runPath, $true)
-        if ($null -ne $runKey) { $runKey.DeleteValue('CardBotFarmAutostart', $false) }
+        if ($null -ne $runKey) {
+            $runKey.DeleteValue('CardBotFarmAutostart', $false)
+        }
     } finally {
         if ($null -ne $runKey) { $runKey.Dispose() }
     }
@@ -146,8 +161,14 @@ try {
     if (-not $locked) { throw 'Переключение автозапуска уже выполняется.' }
 
     $existing = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
-    if ($null -eq $existing -or $existing.State -eq 'Disabled') {
-        if (-not (Test-Path -LiteralPath $startFile -PathType Leaf)) { throw 'Не найден C:\CardBot\start.bat; задача не изменена.' }
+    $legacyEnabled = Test-LegacyAutostartValue
+    if ($null -eq $existing -and $legacyEnabled) {
+        # Preserve toggle semantics during migration: old autorun is ON, so this click turns it OFF.
+        $operation = 'DISABLED'
+    } elseif ($null -eq $existing -or $existing.State -eq 'Disabled') {
+        if (-not (Test-Path -LiteralPath $startFile -PathType Leaf)) {
+            throw 'Не найден C:\CardBot\start.bat; задача не изменена.'
+        }
         $user = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
         $action = New-ScheduledTaskAction -Execute (Join-Path $env:WINDIR 'System32\cmd.exe') -Argument ('/d /c ""' + $startFile + '""') -WorkingDirectory 'C:\CardBot'
         $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
@@ -160,9 +181,11 @@ try {
         $operation = 'DISABLED'
     }
 
+    # Change legacy settings only after the new task operation succeeded.
     $legacyClean = $true
-    try { Remove-LegacyAutostartValue }
-    catch {
+    try {
+        Remove-LegacyAutostartValue
+    } catch {
         $legacyClean = $false
         Write-TaskLog ("WARNING: task toggled to $operation but legacy Run value could not be removed: " + $_.Exception.Message)
     }
@@ -178,7 +201,6 @@ try {
     $mutex.Dispose()
 }
 """
-
 def _ensure_autostart_helper():
     """Write the fixed helper only when the updater has not deployed it yet."""
     if os.path.isfile(AUTOSTART_PS_SCRIPT_PATH):
@@ -198,8 +220,11 @@ def is_autostart_enabled():
     """Read the task's Enabled flag from Task Scheduler, not its runtime state."""
     script = (
         "$t = Get-ScheduledTask -TaskName 'CardBot - AutoStart' -ErrorAction SilentlyContinue; "
-        "if ($null -eq $t) { exit 3 }; "
-        "if ($t.Settings.Enabled) { exit 0 }; exit 1"
+        "if ($null -ne $t) { if ($t.Settings.Enabled) { exit 0 }; exit 1 }; "
+        "$k = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Software\\Microsoft\\Windows\\CurrentVersion\\Run', $false); "
+        "if ($null -eq $k) { exit 3 }; "
+        "try { $v = $k.GetValue('CardBotFarmAutostart', $null) } finally { $k.Dispose() }; "
+        "if (-not [string]::IsNullOrWhiteSpace([string]$v)) { exit 0 }; exit 3"
     )
     try:
         result = subprocess.run(
