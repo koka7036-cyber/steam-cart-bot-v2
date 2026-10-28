@@ -897,7 +897,7 @@ def funpay_check_unread_chats():
                         f"Покупатель: {sender_name}\n"
                         f"Лот: {sets_per_item} сет. × {order_quantity} шт.\n"
                         f"Резерв: {record.get('status')}.\n"
-                        f"Ожидается Steam trade-ссылка в чате или текстовый файл."
+                        f"Ожидается Steam trade-ссылка обычным текстовым сообщением в чате FunPay."
                     )
             else:
                 input_kind = "chat_trade_url"
