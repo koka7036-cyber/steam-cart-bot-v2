@@ -68,6 +68,16 @@ Write-Host 'Пароль Steam не сохраняется: при каждом 
 [void](Read-RequiredValue 'Telegram Bot Token (из BotFather)' 'TG_TOKEN' $true)
 $steamId = Read-RequiredValue 'SteamID64 (17 цифр)' 'STEAM_ID'
 if ($steamId -notmatch '^\d{17}
+    Write-Host '[ОШИБКА] SteamID64 должен состоять из 17 цифр. Перезапусти настройку и введи корректный ID.' -ForegroundColor Red
+    exit 2
+}
+[void](Read-RequiredValue 'Имя аккаунта Steam для входа' 'STEAM_LOGIN')
+[Environment]::SetEnvironmentVariable('STEAM_PASSWORD', $null, 'User')
+
+Write-Host ''
+Write-Host '[OK] Зависимости установлены, настройки сохранены.' -ForegroundColor Green
+Write-Host 'Следующий шаг: настрой ASF и FunPay, затем запусти start.bat.' -ForegroundColor Yellow
+Write-Host 'Пароль Steam запрашивается только на время процесса; настройка не проверяет Steam-вход и не отправляет предложения обмена.'
 ) {
     Write-Host '[ОШИБКА] SteamID64 должен состоять из 17 цифр. Перезапусти настройку и введи корректный ID.' -ForegroundColor Red
     exit 2
