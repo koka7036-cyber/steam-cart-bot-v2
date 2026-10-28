@@ -19,7 +19,7 @@ OPEN_STATUSES = {"awaiting_input", "input_received", "reserved", "review", "retr
 
 
 STEAM_TRADE_URL_RE = re.compile(
-    r"https?://steamcommunity\.com/tradeoffer/new/\?[^\s<>\"']+",
+    r"https?://steamcommunity\.com/tradeoffer/new/\?[^\s<>\"'\\]+",
     re.IGNORECASE,
 )
 _ALLOWED_TEXT_EXTENSIONS = {".txt", ".text", ".csv", ".log"}
