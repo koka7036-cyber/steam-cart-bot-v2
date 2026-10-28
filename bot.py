@@ -680,68 +680,6 @@ def record_funpay_buyer_input(node_id, trade_url, input_kind):
 MAX_FUNPAY_TEXT_ATTACHMENT_BYTES = 64 * 1024
 
 
-def download_funpay_text_attachment(session, attachment_url, chat_url):
-    """Download a small .txt-like attachment from FunPay only, without external redirects."""
-    current_url = urllib.parse.urljoin(chat_url, attachment_url)
-    allowed_hosts = ("funpay.com",)
-    response = None
-    try:
-        for _ in range(4):
-            parsed = urllib.parse.urlparse(current_url)
-            host = (parsed.hostname or "").lower()
-            if parsed.scheme != "https" or not (host == "funpay.com" or host.endswith("." + allowed_hosts[0])):
-                return None, "Ссылка на вложение ведёт не на FunPay; загрузка заблокирована."
-            response = session.get(
-                current_url, timeout=12, allow_redirects=False, stream=True
-            )
-            if response.status_code in {301, 302, 303, 307, 308}:
-                location = response.headers.get("Location")
-                response.close()
-                response = None
-                if not location:
-                    return None, "FunPay вернул перенаправление без адреса файла."
-                current_url = urllib.parse.urljoin(current_url, location)
-                continue
-            if response.status_code >= 400:
-                return None, f"FunPay не дал скачать вложение (HTTP {response.status_code})."
-
-            disposition = response.headers.get("Content-Disposition", "")
-            name_match = re.search(r"filename\*?=(?:UTF-8''|\"?)([^\";]+)", disposition, re.IGNORECASE)
-            filename = urllib.parse.unquote(name_match.group(1).strip().strip('"')) if name_match else ""
-            path_name = urllib.parse.urlparse(current_url).path
-            content_type = response.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
-            extension_ok = any(
-                value.lower().endswith(ext)
-                for value in (filename, path_name)
-                for ext in (".txt", ".text", ".csv", ".log")
-            )
-            if not extension_ok and content_type not in {"text/plain", "text/csv"}:
-                return None, "Вложение не подтверждено как текстовый файл (.txt/.text/.csv/.log)."
-
-            size_header = response.headers.get("Content-Length")
-            if size_header and size_header.isdigit() and int(size_header) > MAX_FUNPAY_TEXT_ATTACHMENT_BYTES:
-                return None, "Текстовый файл слишком большой (лимит 64 КБ)."
-            chunks = []
-            total = 0
-            for chunk in response.iter_content(chunk_size=8192):
-                if not chunk:
-                    continue
-                total += len(chunk)
-                if total > MAX_FUNPAY_TEXT_ATTACHMENT_BYTES:
-                    return None, "Текстовый файл слишком большой (лимит 64 КБ)."
-                chunks.append(chunk)
-            try:
-                return decode_text_attachment(b"".join(chunks), MAX_FUNPAY_TEXT_ATTACHMENT_BYTES), None
-            except ValueError as exc:
-                return None, str(exc)
-        return None, "Слишком много перенаправлений при скачивании вложения."
-    except requests.RequestException as exc:
-        return None, f"Ошибка загрузки вложения FunPay ({type(exc).__name__})."
-    finally:
-        if response is not None:
-            response.close()
-
-
 def apply_reserved_assets_to_cache(cache_data, orders=None, vouchers=None):
     """Filter the current cache using persistent FunPay and voucher reservations."""
     if orders is None:
