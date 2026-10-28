@@ -1913,10 +1913,10 @@ def customer_help_howto(message):
 @bot.message_handler(func=lambda m: m.text and m.text.startswith("⚙️ Автозапуск Windows:"))
 def handle_toggle_autostart(message):
     db = load_json(DB_FILE, {"admin_id": None, "vouchers": {}})
-    if message.chat.id != db["admin_id"]:
+    if message.chat.id != db.get("admin_id") or message.from_user.id != db.get("admin_id"):
         return
     _, msg = toggle_autostart()
-    bot.send_message(message.chat.id, msg, reply_markup=build_admin_keyboard(), parse_mode="Markdown")
+    bot.send_message(message.chat.id, msg, reply_markup=build_admin_keyboard())
 
 @bot.message_handler(commands=["fp"])
 def set_fp_key(message):
