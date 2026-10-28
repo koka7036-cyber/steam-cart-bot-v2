@@ -1,7 +1,7 @@
 $ErrorActionPreference = 'Stop'
 $taskName = 'CardBot - AutoStart'
-$startFile = 'C:\CardBot\start.bat'
-$logFile = 'C:\CardBot\autostart_task.log'
+$startFile = Join-Path $PSScriptRoot 'start.bat'
+$logFile = Join-Path $PSScriptRoot 'autostart_task.log'
 $mutexName = 'Global\CardBotAutoStartTaskToggle'
 $mutex = New-Object System.Threading.Mutex($false, $mutexName)
 $locked = $false
@@ -50,10 +50,10 @@ try {
         $operation = 'DISABLED'
     } elseif ($null -eq $existing -or $existing.State -eq 'Disabled') {
         if (-not (Test-Path -LiteralPath $startFile -PathType Leaf)) {
-            throw 'Не найден C:\CardBot\start.bat; задача не изменена.'
+            throw ('Не найден файл запуска: ' + $startFile + '; задача не изменена.')
         }
         $user = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-        $action = New-ScheduledTaskAction -Execute (Join-Path $env:WINDIR 'System32\cmd.exe') -Argument ('/d /c ""' + $startFile + '""') -WorkingDirectory 'C:\CardBot'
+        $action = New-ScheduledTaskAction -Execute (Join-Path $env:WINDIR 'System32\cmd.exe') -Argument ('/d /c ""' + $startFile + '""') -WorkingDirectory $PSScriptRoot
         $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
         $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero)
         $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
