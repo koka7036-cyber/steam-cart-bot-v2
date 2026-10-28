@@ -30,8 +30,8 @@ try {
             }
         }
 
-        Set-Location 'C:\CardBot'
-        & py -3 bot.py
+        Set-Location -LiteralPath $PSScriptRoot
+        & py -3 (Join-Path $PSScriptRoot 'bot.py')
         $exitCode = $LASTEXITCODE
     } else {
         Write-Output 'Bot already running; duplicate launch skipped.'
