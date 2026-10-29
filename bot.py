@@ -1628,8 +1628,8 @@ def build_admin_keyboard():
 
     if section == "stock":
         markup.add("🔄 Обновить кэш склада", "📊 Остатки в кэше")
-        markup.add("🟢 Коды FunPay (1 сет)", "🟢 Коды FunPay (5 сетов)")
-        markup.add("🔵 Коды Playerok (1 сет)", "🔵 Коды Playerok (5 сетов)")
+        markup.add("📋 Панель FunPay — сводка", "📋 Последние заказы FunPay")
+        markup.add("🔵 Playerok — панель", "📋 Последние сделки Playerok")
         markup.add(ADMIN_BACK_MENU)
     elif section == "funpay":
         fp_cfg = load_json(FP_CONFIG_FILE, {})
