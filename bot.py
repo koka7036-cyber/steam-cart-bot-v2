@@ -111,14 +111,14 @@ bot.edit_message_text = _edit_message_with_plain_text_fallback
 import subprocess
 
 AUTOSTART_TASK_NAME = "CardBot - AutoStart"
-AUTOSTART_PS_SCRIPT_PATH = r"C:\CardBot\toggle_autostart_task.ps1"
+AUTOSTART_PS_SCRIPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "toggle_autostart_task.ps1")
 
 # Bootstrap fallback: older deployed updaters may update bot.py before they know
 # to deploy the helper file. Create the same fixed helper locally when needed.
 _AUTOSTART_HELPER_FALLBACK = r"""$ErrorActionPreference = 'Stop'
 $taskName = 'CardBot - AutoStart'
-$startFile = 'C:\CardBot\start.bat'
-$logFile = 'C:\CardBot\autostart_task.log'
+$startFile = Join-Path $PSScriptRoot 'start.bat'
+$logFile = Join-Path $PSScriptRoot 'autostart_task.log'
 $mutexName = 'Global\CardBotAutoStartTaskToggle'
 $mutex = New-Object System.Threading.Mutex($false, $mutexName)
 $locked = $false
@@ -167,10 +167,10 @@ try {
         $operation = 'DISABLED'
     } elseif ($null -eq $existing -or $existing.State -eq 'Disabled') {
         if (-not (Test-Path -LiteralPath $startFile -PathType Leaf)) {
-            throw 'Не найден C:\CardBot\start.bat; задача не изменена.'
+            throw ('Не найден start.bat рядом с ботом: ' + $startFile + '; задача не изменена.')
         }
         $user = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-        $action = New-ScheduledTaskAction -Execute (Join-Path $env:WINDIR 'System32\cmd.exe') -Argument ('/d /c ""' + $startFile + '""') -WorkingDirectory 'C:\CardBot'
+        $action = New-ScheduledTaskAction -Execute (Join-Path $env:WINDIR 'System32\cmd.exe') -Argument ('/d /c ""' + $startFile + '""') -WorkingDirectory $PSScriptRoot
         $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
         $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero)
         $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
@@ -240,7 +240,7 @@ def toggle_autostart():
     """Toggle one fixed scheduled task; no user-supplied command reaches PowerShell."""
     before = is_autostart_enabled()
     if not _ensure_autostart_helper():
-        return before, "Не найден файл управления автозапуском, и не удалось создать его. Проверь права доступа к C:\\CardBot."
+        return before, "Не удалось создать файл управления автозапуском рядом с ботом. Проверь права доступа к папке проекта."
     try:
         result = subprocess.run(
             ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive",
@@ -260,8 +260,8 @@ def toggle_autostart():
     output = (result.stdout or "").strip()
     if "LEGACY_ENTRY_REMAINS" in output:
         if after:
-            return True, "🟢 Автозапуск Windows включён, но старая запись автозапуска не удалена. Проверь C:\\CardBot\\autostart_task.log."
-        return False, "🔴 Автозапуск Windows выключен, но старая запись автозапуска не удалена. Проверь C:\\CardBot\\autostart_task.log."
+            return True, "🟢 Автозапуск Windows включён, но старая запись не удалена. Проверь autostart_task.log в папке бота."
+        return False, "🔴 Автозапуск Windows выключен, но старая запись не удалена. Проверь autostart_task.log в папке бота."
     if after:
         return True, "🟢 Автозапуск Windows включён."
     return False, "🔴 Автозапуск Windows выключен."
@@ -1661,14 +1661,14 @@ def build_admin_keyboard():
         markup.add(auto_label)
         markup.add("🔄 Проверить состояние бота", ADMIN_BACK_MENU)
     else:
-        markup.add("📦 Склад и коды", "🟢 FunPay")
+        markup.add("📦 Склад", "🟢 FunPay")
         markup.add("🔵 Playerok", "📈 Продажи и аналитика")
         markup.add("⚙️ Настройки")
     return markup
 
 def build_customer_keyboard():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add("🔗 Где взять трейд-ссылку?", "❓ Как получить карточки?")
+    markup.add("🔗 Где взять трейд-ссылку?", "❓ Как отправить трейд-ссылку?")
     return markup
 
 def get_tradeurl_help_markup():
@@ -2340,6 +2340,7 @@ def handle_all_messages(message):
                 f"FunPay: {'ключ настроен' if str(cfg.get('golden_key', '')).strip() else 'ключ не задан'}\n"
                 f"Playerok: {'токен задан' if playerok_configured else 'не настроен'}\n"
                 f"Автозапуск Windows: {'включён' if is_autostart_enabled() else 'выключен'}\n"
+                f"Автоподнятие лотов: {fp_state.get('last_raise', 'Нет данных')}\n"
                 f"Приём Steam trade-ссылок в чате FunPay: {'включён' if cfg.get('allow_chat_trade_url', True) is True else 'выключен'}\n"
                 f"Автовыдача FunPay: {'включена настройкой' if cfg.get('auto_delivery_funpay', False) is True else 'выключена настройкой'}; фактическая выдача может быть ограничена защитой модерации.\n"
                 "Автовыдача Playerok: выключена."
