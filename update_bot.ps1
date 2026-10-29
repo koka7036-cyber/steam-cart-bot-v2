@@ -25,6 +25,21 @@ try {
         exit 0
     }
     $headers = @{ 'User-Agent' = 'SteamCardsBot-Updater'; 'Accept' = 'application/vnd.github+json' }
+    # This repository is PRIVATE, so anonymous GitHub API/codeload requests return 404.
+    # Use a token already configured on this PC; never hard-code credentials in the script.
+    $githubToken = ''
+    if ($env:GH_TOKEN) { $githubToken = $env:GH_TOKEN }
+    elseif ($env:GITHUB_TOKEN) { $githubToken = $env:GITHUB_TOKEN }
+    else {
+        $gh = Get-Command gh -ErrorAction SilentlyContinue
+        if ($gh) {
+            try { $githubToken = (& gh auth token 2>$null | Select-Object -First 1).Trim() } catch { $githubToken = '' }
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($githubToken)) {
+        throw 'GitHub repository is private, but no authentication token was found. Sign in with GitHub CLI (gh auth login) or set GH_TOKEN for this Windows user. No files were changed.'
+    }
+    $headers['Authorization'] = 'Bearer ' + $githubToken
     # Use the commits list endpoint with the branch as a query parameter.
     # This avoids GitHub/API gateways interpreting slashes in branch names as URL path separators.
     $encodedBranch = [Uri]::EscapeDataString($Branch)
@@ -53,7 +68,7 @@ try {
         $extract = Join-Path $tempRoot 'source'
         $zipUrl = "https://codeload.github.com/$Repo/zip/refs/heads/$Branch"
         try {
-            Invoke-WebRequest -Uri $zipUrl -OutFile $zip -Headers @{ 'User-Agent' = 'SteamCardsBot-Updater' } -TimeoutSec 90
+            Invoke-WebRequest -Uri $zipUrl -OutFile $zip -Headers @{ 'User-Agent' = 'SteamCardsBot-Updater'; 'Authorization' = ('Bearer ' + $githubToken) } -TimeoutSec 90
         } catch {
             throw ("Не удалось скачать архив ветки с GitHub (URL: $zipUrl). Проверь доступность репозитория/ветки. Исходная ошибка: " + $_.Exception.Message)
         }
