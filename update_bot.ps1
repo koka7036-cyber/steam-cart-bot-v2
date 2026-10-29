@@ -25,12 +25,14 @@ try {
         exit 0
     }
     $headers = @{ 'User-Agent' = 'SteamCardsBot-Updater'; 'Accept' = 'application/vnd.github+json' }
-    # Encode the slash in the branch name explicitly; otherwise some proxies/API
-    # layers misroute refs containing multiple path segments and return a false 404.
+    # Use the commits list endpoint with the branch as a query parameter.
+    # This avoids GitHub/API gateways interpreting slashes in branch names as URL path separators.
     $encodedBranch = [Uri]::EscapeDataString($Branch)
-    $commitUrl = "https://api.github.com/repos/$Repo/commits/$encodedBranch"
+    $commitUrl = "https://api.github.com/repos/$Repo/commits?sha=$encodedBranch&per_page=1"
     try {
-        $remote = Invoke-RestMethod -Uri $commitUrl -Headers $headers -TimeoutSec 25
+        $remoteCommits = Invoke-RestMethod -Uri $commitUrl -Headers $headers -TimeoutSec 25
+        $remote = @($remoteCommits) | Select-Object -First 1
+        if (-not $remote) { throw "GitHub returned no commits for branch '$Branch'." }
     } catch {
         throw ("Не удалось прочитать commit GitHub (URL: $commitUrl). Проверь доступность репозитория/ветки и подключение. Исходная ошибка: " + $_.Exception.Message)
     }
@@ -49,7 +51,7 @@ try {
     try {
         $zip = Join-Path $tempRoot 'source.zip'
         $extract = Join-Path $tempRoot 'source'
-        $zipUrl = "https://codeload.github.com/$Repo/zip/refs/heads/$encodedBranch"
+        $zipUrl = "https://codeload.github.com/$Repo/zip/refs/heads/$Branch"
         try {
             Invoke-WebRequest -Uri $zipUrl -OutFile $zip -Headers @{ 'User-Agent' = 'SteamCardsBot-Updater' } -TimeoutSec 90
         } catch {
