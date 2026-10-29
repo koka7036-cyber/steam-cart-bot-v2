@@ -1631,6 +1631,10 @@ def build_admin_keyboard():
         markup.add("🔵 Коды Playerok (1 сет)", "🔵 Коды Playerok (5 сетов)")
         markup.add(ADMIN_BACK_MENU)
     elif section == "funpay":
+        fp_cfg = load_json(FP_CONFIG_FILE, {})
+        fp_key = str(fp_cfg.get("golden_key", "")).strip()
+        fp_key_label = "🔑 Ключ FunPay: задан 🟢" if fp_key else "🔑 Ключ FunPay: НЕ задан 🔴"
+        markup.add(fp_key_label)
         markup.add("📋 Панель FunPay — сводка", "📋 Последние заказы FunPay")
         markup.add("🔄 Проверить соединение FunPay", ADMIN_BACK_MENU)
     elif section == "playerok":
@@ -1943,14 +1947,39 @@ def handle_toggle_autostart(message):
     _, msg = toggle_autostart()
     bot.send_message(message.chat.id, msg, reply_markup=build_admin_keyboard())
 
+@bot.message_handler(func=lambda m: m.text == "🔑 Ключ FunPay: задан 🟢" or m.text == "🔑 Ключ FunPay: НЕ задан 🔴")
+def show_funpay_key_status(message):
+    db = load_json(DB_FILE, {"admin_id": None, "vouchers": {}})
+    if message.chat.id != db.get("admin_id") or message.from_user.id != db.get("admin_id"):
+        return
+    config = load_json(FP_CONFIG_FILE, {})
+    key = str(config.get("golden_key", "")).strip()
+    if key:
+        masked = key[:4] + "…" + key[-4:] if len(key) > 10 else "••••••"
+        status = f"🟢 Ключ FunPay сохранён: `{masked}`"
+    else:
+        status = "🔴 Ключ FunPay не задан."
+    bot.send_message(
+        message.chat.id,
+        f"{status}\n\nЧтобы задать или заменить ключ, отправь команду:\n`/fp ТВОЙ_GOLDEN_KEY`\n\nПолный ключ не показывается в панели.",
+        parse_mode="Markdown",
+        reply_markup=build_admin_keyboard()
+    )
+
 @bot.message_handler(commands=["fp"])
 def set_fp_key(message):
     db = load_json(DB_FILE, {"admin_id": None, "vouchers": {}})
-    if message.chat.id != db["admin_id"]:
+    if message.chat.id != db.get("admin_id") or message.from_user.id != db.get("admin_id"):
         return
     parts = message.text.split(maxsplit=1)
     if len(parts) < 2:
-        bot.send_message(message.chat.id, "⚠️ Напиши ключ через пробел: `/fp твой_golden_key`", parse_mode="Markdown")
+        config = load_json(FP_CONFIG_FILE, {})
+        key = str(config.get("golden_key", "")).strip()
+        if key:
+            masked = key[:4] + "…" + key[-4:] if len(key) > 10 else "••••••"
+            bot.send_message(message.chat.id, f"🟢 Ключ FunPay уже сохранён: `{masked}`\nДля замены: `/fp ТВОЙ_GOLDEN_KEY`", parse_mode="Markdown")
+        else:
+            bot.send_message(message.chat.id, "🔴 Ключ FunPay не задан. Отправь: `/fp ТВОЙ_GOLDEN_KEY`", parse_mode="Markdown")
         return
     key = parts[1].strip()
     config = load_json(FP_CONFIG_FILE, {})
