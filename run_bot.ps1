@@ -30,7 +30,10 @@ try {
             Write-Host "[ERROR] Python Launcher (py.exe) не найден. Установи Python 3.11+ с python.org и включи Python Launcher." -ForegroundColor Red
             $exitCode = 2
         } else {
+            Write-Host '[1/3] Ожидается пароль Steam. Ввод скрыт.' -ForegroundColor Cyan
             $securePassword = Read-Host 'Пароль Steam (ввод скрыт; не сохраняется в переменных пользователя)' -AsSecureString
+            Write-Host '[2/3] Пароль введён. Передаю управление боту и начинаю проверку авторизации Steam...' -ForegroundColor Yellow
+            Write-Host '[INFO] Успешный вход будет показан только после подтверждения ответа Steam.' -ForegroundColor DarkGray
             $passwordPtr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($securePassword)
             try {
                 $plainPassword = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($passwordPtr)
