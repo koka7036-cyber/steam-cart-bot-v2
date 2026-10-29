@@ -12,6 +12,17 @@ echo ==================================================
 echo.
 echo Log: "%LOG%"
 echo.
+echo Checking for bot updates...
+if exist "%~dp0update_bot.ps1" (
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0update_bot.ps1"
+  if errorlevel 1 (
+    echo [WARN] Update failed; continuing with the current installed version.
+    >> "%LOG%" echo [%date% %time%] Update failed; continuing with current version.
+  )
+) else (
+  echo [WARN] update_bot.ps1 missing; automatic updates unavailable.
+)
+echo.
 
 REM Delayed expansion prevents parentheses in paths such as "ASF-win-x64 (1)" breaking CMD blocks.
 set "ASF_EXE="
