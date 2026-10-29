@@ -1,35 +1,70 @@
 @echo off
+setlocal
 chcp 65001 >nul
-echo [UPDATE] Проверяю GitHub перед запуском бота...
-powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "C:\CardBot\update_bot.ps1"
-if errorlevel 1 echo [WARN] Обновление пропущено; запускается сохранённая версия.
+title Steam Cards Bot Launcher
+cd /d "%~dp0"
 
-title Управление фермой: ASF + Steam Курьер + FunPay 24/7
+echo ==================================================
+echo Steam Cards Bot Launcher
+echo ==================================================
+echo.
 
-echo ===================================================
-echo [1/2] Проверка запуска ArchiSteamFarm (ASF)...
-echo ===================================================
-tasklist /FI "IMAGENAME eq ArchiSteamFarm.exe" 2>NUL | find /I /N "ArchiSteamFarm.exe">NUL
-if "%ERRORLEVEL%"=="0" (
-    echo [OK] ASF уже работает! Повторный запуск не требуется.
+REM ASF is optional for starting the Telegram bot. If a saved path exists,
+REM use it; otherwise try a few common locations and offer a file picker.
+set "ASF_EXE="
+set "CACHE=%~dp0.asf_path.txt"
+if exist "%CACHE%" set /p ASF_EXE=<"%CACHE%"
+
+if defined ASF_EXE if not exist "%ASF_EXE%" set "ASF_EXE="
+
+if not defined ASF_EXE (
+    for %%P in (
+        "%~dp0ArchiSteamFarm.exe"
+        "%~dp0ASFArchiSteamFarm.exe"
+        "%~dp0ASF-win-x64ArchiSteamFarm.exe"
+        "%~dp0ASF-win-x64 (1)ArchiSteamFarm.exe"
+        "C:CardBotASFArchiSteamFarm.exe"
+        "C:CardBotASF-win-x64ArchiSteamFarm.exe"
+        "C:CardBotASF-win-x64 (1)ArchiSteamFarm.exe"
+    ) do (
+        if exist "%%~P" (
+            set "ASF_EXE=%%~P"
+            goto :asf_found
+        )
+    )
+)
+
+:asf_found
+if not defined ASF_EXE (
+    echo ASF path was not found automatically.
+    echo You can select ArchiSteamFarm.exe, or continue without ASF.
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Add-Type -AssemblyName System.Windows.Forms; $d=New-Object System.Windows.Forms.OpenFileDialog; $d.Title='Select ArchiSteamFarm.exe (Cancel to continue without ASF)'; $d.Filter='ArchiSteamFarm.exe|ArchiSteamFarm.exe|Executable files (*.exe)|*.exe'; if($d.ShowDialog() -eq 'OK'){[IO.File]::WriteAllText((Join-Path $env:CARDBOT_LAUNCHER_DIR '.asf_path.txt'),$d.FileName); Write-Output $d.FileName}" > "%TEMP%\cardbot_asf_path.txt"
+    set "CARDBOT_LAUNCHER_DIR=%~dp0"
+    if exist "%TEMP%\cardbot_asf_path.txt" set /p ASF_EXE=<"%TEMP%\cardbot_asf_path.txt"
+    del "%TEMP%\cardbot_asf_path.txt" >nul 2>&1
+)
+
+if defined ASF_EXE (
+    if exist "%ASF_EXE%" (
+        echo [INFO] ASF: "%ASF_EXE%"
+        tasklist /FI "IMAGENAME eq ArchiSteamFarm.exe" 2>NUL | find /I "ArchiSteamFarm.exe" >NUL
+        if errorlevel 1 start "ArchiSteamFarm" "%ASF_EXE%"
+        if not exist "%CACHE%" >"%CACHE%" echo %ASF_EXE%
+    ) else (
+        echo [WARN] ASF path is invalid. Continuing without ASF.
+    )
 ) else (
-    echo [СТАРТ] Запускаю ASF в отдельном окне...
-    start "ArchiSteamFarm" /D "C:\CardBot\ASF-win-x64 (1)" "ArchiSteamFarm.exe"
-    echo Ждем 10 секунд, пока ASF войдет в Steam и включит IPC...
-    timeout /t 10 /nobreak >nul
+    echo [WARN] ASF not selected. Continuing with Telegram bot only.
 )
 
 echo.
-echo ===================================================
-echo [2/2] Запуск единого бота (Steam + FunPay 24/7)...
-echo ===================================================
-:loop
-powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "C:\CardBot\run_bot.ps1"
-if errorlevel 23 (
-    echo [INFO] Бот уже запущен; повторный запуск пропущен.
-    exit /b 0
+echo Starting Telegram bot from:
+echo "%~dp0"
+if not exist "%~dp0run_bot.ps1" (
+    echo [ERROR] run_bot.ps1 not found beside this launcher.
+    pause
+    exit /b 2
 )
-
-echo Бот перезапускается через 5 секунд...
-timeout /t 5 /nobreak >nul
-goto loop
+start "Steam Cards Telegram Bot" powershell.exe -NoProfile -NoExit -ExecutionPolicy Bypass -File "%~dp0run_bot.ps1"
+echo Launch command sent. Check the Telegram bot window for its startup result.
+endlocal
