@@ -489,6 +489,24 @@ def payment_key(node_id: str, text: str) -> str:
 
 
 
+
+def funpay_input_signature(node_id: str, sender_name: str, message_fragment: str, message_text: str = "") -> str:
+    """Stable, non-reversible fingerprint for one incoming chat message.
+
+    Include the rendered message fragment (which normally includes sender/time metadata)
+    so the same URL sent in a new message is distinct, while polling the same message
+    does not re-trigger delivery. The original URL is never stored by this helper.
+    """
+    raw_fragment = message_fragment or ""
+    visible_fragment = html.unescape(re.sub(r"<[^>]+>", " ", raw_fragment))
+    visible_fragment = re.sub(r"\\s+", " ", visible_fragment).strip()
+    text = re.sub(r"\\s+", " ", (message_text or "").strip())
+    stable_id_match = re.search(r"\\bdata-(?:message-)?id\\s*=\\s*(['\\\"])(.*?)\\1", raw_fragment, re.IGNORECASE)
+    stable_id = stable_id_match.group(2) if stable_id_match else ""
+    digest = hashlib.sha256(f"{node_id}|{sender_name}|{stable_id}|{visible_fragment}|{text}".encode("utf-8", errors="replace")).hexdigest()
+    return digest
+
+
 def message_signature(sender_name: str, preview: str) -> str:
     """Create a stable signature without storing the message preview itself."""
     source = f"{sender_name or ''}:{preview or ''}".encode("utf-8", errors="replace")
