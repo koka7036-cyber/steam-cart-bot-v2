@@ -13,49 +13,27 @@ echo.
 echo Log: "%LOG%"
 echo.
 
-REM ASF auto-discovery: cached path, configured path, Desktop known folders (including OneDrive), then common folders.
+REM Avoid CMD parser errors by keeping complex discovery logic in PowerShell.
 set "ASF_EXE="
 set "CACHE=%~dp0.asf_path.txt"
-set "PICK=%TEMP%\cardbot_asf_path.txt"
 if defined CARD_BOT_ASF_DIR if exist "%CARD_BOT_ASF_DIR%\ArchiSteamFarm.exe" set "ASF_EXE=%CARD_BOT_ASF_DIR%\ArchiSteamFarm.exe"
 if not defined ASF_EXE if exist "%CACHE%" set /p ASF_EXE=<"%CACHE%"
 if defined ASF_EXE if not exist "%ASF_EXE%" set "ASF_EXE="
 
-REM Resolve actual Windows Desktop path (may be OneDrive\Desktop instead of USERPROFILE\Desktop).
 if not defined ASF_EXE (
-  for /f "usebackq delims=" %%D in (`powershell.exe -NoProfile -Command "[Environment]::GetFolderPath('Desktop')" 2^>nul`) do set "DESKTOP_REAL=%%D"
-  for %%P in (
-    "%~dp0ArchiSteamFarm.exe"
-    "%~dp0ASF\ArchiSteamFarm.exe"
-    "%~dp0ASF-win-x64\ArchiSteamFarm.exe"
-    "%~dp0ASF-win-x64 (1)\ArchiSteamFarm.exe"
-    "%DESKTOP_REAL%\ASF-win-x64\ArchiSteamFarm.exe"
-    "%DESKTOP_REAL%\ASF-win-x64 (1)\ArchiSteamFarm.exe"
-    "%USERPROFILE%\Desktop\ASF-win-x64\ArchiSteamFarm.exe"
-    "%USERPROFILE%\Desktop\ASF-win-x64 (1)\ArchiSteamFarm.exe"
-    "%OneDrive%\Desktop\ASF-win-x64\ArchiSteamFarm.exe"
-    "%OneDrive%\Desktop\ASF-win-x64 (1)\ArchiSteamFarm.exe"
-    "C:\CardBot\ASF\ArchiSteamFarm.exe"
-    "C:\CardBot\ASF-win-x64\ArchiSteamFarm.exe"
-    "C:\CardBot\ASF-win-x64 (1)\ArchiSteamFarm.exe"
-  ) do if exist "%%~P" (set "ASF_EXE=%%~P" & goto :asf_found)
+  echo Searching for ArchiSteamFarm.exe...
+  >> "%LOG%" echo [%date% %time%] Searching for ASF with PowerShell.
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='SilentlyContinue'; $roots=@([Environment]::GetFolderPath('Desktop'),(Join-Path $env:USERPROFILE 'Downloads'),$env:OneDrive,'C:\CardBot',(Get-Location).Path); $roots=$roots|Where-Object{$_ -and (Test-Path -LiteralPath $_)}|Select-Object -Unique; foreach($root in $roots){$hit=Get-ChildItem -LiteralPath $root -Filter 'ArchiSteamFarm.exe' -File -Recurse -ErrorAction SilentlyContinue|Select-Object -First 1; if($hit){[Console]::Write($hit.FullName); exit 0}}; exit 1" > "%TEMP%\cardbot_asf_path.txt"
+  if exist "%TEMP%\cardbot_asf_path.txt" set /p ASF_EXE=<"%TEMP%\cardbot_asf_path.txt"
+  del "%TEMP%\cardbot_asf_path.txt" >nul 2>&1
 )
 
-REM Fallback recursive search in likely user folders; this also catches renamed ASF folders.
-if not defined ASF_EXE (
-  echo Searching Desktop, Downloads, and C:\CardBot for ArchiSteamFarm.exe...
-  >> "%LOG%" echo [%date% %time%] Running fallback ASF search.
-  for /f "usebackq delims=" %%F in (`powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$roots=@([Environment]::GetFolderPath('Desktop'), (Join-Path $env:USERPROFILE 'Downloads'), 'C:\CardBot', $env:OneDrive); $roots=$roots | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -Unique; foreach($root in $roots){ $hit=Get-ChildItem -LiteralPath $root -Filter 'ArchiSteamFarm.exe' -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1; if($hit){$hit.FullName; break} }" 2^>nul`) do if not defined ASF_EXE set "ASF_EXE=%%F"
-)
-
-:asf_found
 if not defined ASF_EXE (
   echo ASF was not found automatically.
   echo Select ArchiSteamFarm.exe, or cancel to continue without ASF.
-  del "%PICK%" >nul 2>&1
-  powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Add-Type -AssemblyName System.Windows.Forms; $d=New-Object System.Windows.Forms.OpenFileDialog; $d.Title='Select ArchiSteamFarm.exe (Cancel to continue without ASF)'; $d.Filter='ArchiSteamFarm.exe|ArchiSteamFarm.exe|Executable files (*.exe)|*.exe'; if($d.ShowDialog() -eq 'OK'){[System.IO.File]::WriteAllText($env:TEMP + '\\cardbot_asf_path.txt', $d.FileName, [System.Text.Encoding]::ASCII)}"
-  if exist "%PICK%" set /p ASF_EXE=<"%PICK%"
-  del "%PICK%" >nul 2>&1
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Add-Type -AssemblyName System.Windows.Forms; $d=New-Object System.Windows.Forms.OpenFileDialog; $d.Title='Select ArchiSteamFarm.exe (Cancel to continue without ASF)'; $d.Filter='ArchiSteamFarm.exe|ArchiSteamFarm.exe|Executable files (*.exe)|*.exe'; if($d.ShowDialog() -eq 'OK'){[Console]::Write($d.FileName)}" > "%TEMP%\cardbot_asf_path.txt"
+  if exist "%TEMP%\cardbot_asf_path.txt" set /p ASF_EXE=<"%TEMP%\cardbot_asf_path.txt"
+  del "%TEMP%\cardbot_asf_path.txt" >nul 2>&1
 )
 
 if defined ASF_EXE if exist "%ASF_EXE%" (
@@ -64,30 +42,24 @@ if defined ASF_EXE if exist "%ASF_EXE%" (
   >"%CACHE%" echo %ASF_EXE%
   tasklist /FI "IMAGENAME eq ArchiSteamFarm.exe" 2>NUL | find /I "ArchiSteamFarm.exe" >NUL
   if errorlevel 1 (
-    echo [INFO] Starting ASF in its own directory...
-    >> "%LOG%" echo [%date% %time%] Starting ASF: "%ASF_EXE%"
     for %%I in ("%ASF_EXE%") do start "ArchiSteamFarm" /D "%%~dpI" "%ASF_EXE%"
     timeout /t 2 /nobreak >nul
   ) else echo [INFO] ASF is already running.
 ) else (
-  echo [WARN] ASF not selected/found. Continuing without ASF.
-  >> "%LOG%" echo [%date% %time%] ASF not selected/found; bot-only startup.
+  echo [WARN] ASF not found/selected. Continuing without ASF.
+  >> "%LOG%" echo [%date% %time%] ASF not found/selected; bot-only startup.
 )
 
-echo.
 if not exist "%~dp0run_bot.ps1" (
   echo [ERROR] run_bot.ps1 not found beside start.bat.
   >> "%LOG%" echo [%date% %time%] ERROR: run_bot.ps1 missing.
-  echo See launcher_start.log for details.
   pause
   exit /b 2
 )
-echo Starting Telegram bot from "%~dp0" ...
+echo Starting Telegram bot...
 >> "%LOG%" echo [%date% %time%] Starting run_bot.ps1
 powershell.exe -NoProfile -NoExit -ExecutionPolicy Bypass -File "%~dp0run_bot.ps1"
-set "BOT_EXIT=%ERRORLEVEL%"
->> "%LOG%" echo [%date% %time%] run_bot.ps1 exited with code %BOT_EXIT%
 echo.
-echo Launcher ended. Log: "%LOG%"
+echo Launcher finished. Log: "%LOG%"
 pause
 endlocal
