@@ -16,6 +16,7 @@ echo.
 REM ASF is optional. The Telegram bot must still be attempted if ASF is absent.
 set "ASF_EXE="
 set "CACHE=%~dp0.asf_path.txt"
+set "PICK=%TEMP%\cardbot_asf_path.txt"
 if defined CARD_BOT_ASF_DIR if exist "%CARD_BOT_ASF_DIR%\ArchiSteamFarm.exe" set "ASF_EXE=%CARD_BOT_ASF_DIR%\ArchiSteamFarm.exe"
 if not defined ASF_EXE if exist "%CACHE%" set /p ASF_EXE=<"%CACHE%"
 if defined ASF_EXE if not exist "%ASF_EXE%" set "ASF_EXE="
@@ -38,9 +39,10 @@ if not defined ASF_EXE (
 if not defined ASF_EXE (
   echo ASF was not found automatically.
   echo Select ArchiSteamFarm.exe, or cancel to continue without ASF.
-  powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Add-Type -AssemblyName System.Windows.Forms; $d=New-Object System.Windows.Forms.OpenFileDialog; $d.Title='Select ArchiSteamFarm.exe (Cancel to continue without ASF)'; $d.Filter='ArchiSteamFarm.exe|ArchiSteamFarm.exe|Executable files (*.exe)|*.exe'; if($d.ShowDialog() -eq 'OK'){Write-Output $d.FileName}" > "%TEMP%\cardbot_asf_path.txt"
-  if exist "%TEMP%\cardbot_asf_path.txt" set /p ASF_EXE=<"%TEMP%\cardbot_asf_path.txt"
-  del "%TEMP%\cardbot_asf_path.txt" >nul 2>&1
+  del "%PICK%" >nul 2>&1
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Add-Type -AssemblyName System.Windows.Forms; $d=New-Object System.Windows.Forms.OpenFileDialog; $d.Title='Select ArchiSteamFarm.exe (Cancel to continue without ASF)'; $d.Filter='ArchiSteamFarm.exe|ArchiSteamFarm.exe|Executable files (*.exe)|*.exe'; if($d.ShowDialog() -eq 'OK'){[System.IO.File]::WriteAllText($env:TEMP + '\\cardbot_asf_path.txt', $d.FileName, [System.Text.Encoding]::ASCII)}"
+  if exist "%PICK%" set /p ASF_EXE=<"%PICK%"
+  del "%PICK%" >nul 2>&1
 )
 
 if defined ASF_EXE if exist "%ASF_EXE%" (
@@ -50,6 +52,7 @@ if defined ASF_EXE if exist "%ASF_EXE%" (
   tasklist /FI "IMAGENAME eq ArchiSteamFarm.exe" 2>NUL | find /I "ArchiSteamFarm.exe" >NUL
   if errorlevel 1 (
     echo [INFO] Starting ASF in its own directory...
+    >> "%LOG%" echo [%date% %time%] Starting ASF: "%ASF_EXE%"
     for %%I in ("%ASF_EXE%") do start "ArchiSteamFarm" /D "%%~dpI" "%ASF_EXE%"
     timeout /t 2 /nobreak >nul
   ) else echo [INFO] ASF is already running.
