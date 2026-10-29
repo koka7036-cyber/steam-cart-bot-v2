@@ -974,9 +974,11 @@ def asf_command(cmd):
 def get_steam_session(force_new=False):
     sess = load_json(SESSION_FILE, {})
     if not force_new and sess.get("steamLoginSecure") and time.time() - sess.get("timestamp", 0) < 43200:
+        print("[Steam] [✓] Используем сохранённую сессию Steam.", flush=True)
         return sess["steamLoginSecure"], None
 
     try:
+        print("[Steam] [1/3] Запрашиваю ключ шифрования Steam...", flush=True)
         r1 = requests.get(
             "https://api.steampowered.com/IAuthenticationService/GetPasswordRSAPublicKey/v1/",
             params={"input_json": json.dumps({"account_name": STEAM_LOGIN})},
@@ -990,6 +992,7 @@ def get_steam_session(force_new=False):
         pub_key = rsa.PublicKey(mod, exp)
         enc_password = base64.b64encode(rsa.encrypt(STEAM_PASSWORD.encode("utf-8"), pub_key)).decode("utf-8")
 
+        print("[Steam] [2/3] Ключ получен. Отправляю запрос авторизации Steam...", flush=True)
         begin_payload = {
             "account_name": STEAM_LOGIN,
             "encrypted_password": enc_password,
@@ -1009,8 +1012,10 @@ def get_steam_session(force_new=False):
         request_id = r2.get("request_id")
         steamid = r2.get("steamid", STEAM_ID)
         if not client_id:
+            print("[Steam] [✗] Steam не создал сессию авторизации; проверь пароль, логин и возможные ограничения входа.", flush=True)
             return None, "Steam отклонил автологин."
 
+        print("[Steam] [3/3] Запрос принят. Проверяю подтверждение Steam Guard через ASF...", flush=True)
         ok, asf_res = asf_command(f"2fa {STEAM_LOGIN}")
         if not ok:
             return None, f"Не удалось получить 2FA из ASF: {asf_res}"
@@ -1036,10 +1041,12 @@ def get_steam_session(force_new=False):
 
         access_token = r4.get("access_token")
         if not access_token:
+            print("[Steam] [!] Steam пока не подтвердил вход. Возможна необходимость дополнительного подтверждения или повторной попытки.", flush=True)
             return None, "Не удалось получить токен сессии Steam."
 
         cookie_val = f"{steamid}%7C%7C{access_token}"
         save_json(SESSION_FILE, {"steamLoginSecure": cookie_val, "timestamp": time.time()})
+        print("[Steam] [✓] Авторизация подтверждена Steam; сессия сохранена.", flush=True)
         return cookie_val, None
     except Exception as e:
         return None, f"Ошибка автологина: {e}"
