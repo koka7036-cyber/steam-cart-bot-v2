@@ -10,9 +10,14 @@ echo ==================================================
 echo.
 
 REM ASF is optional for starting the Telegram bot.
+REM Priority: CARD_BOT_ASF_DIR, saved cache, then common local paths.
 set "ASF_EXE="
 set "CACHE=%~dp0.asf_path.txt"
-if exist "%CACHE%" set /p ASF_EXE=<"%CACHE%"
+if defined CARD_BOT_ASF_DIR (
+    if exist "%CARD_BOT_ASF_DIR%\ArchiSteamFarm.exe" set "ASF_EXE=%CARD_BOT_ASF_DIR%\ArchiSteamFarm.exe"
+    if exist "%CARD_BOT_ASF_DIR%" if /I "%~x1"==".exe" set "ASF_EXE=%CARD_BOT_ASF_DIR%"
+)
+if not defined ASF_EXE if exist "%CACHE%" set /p ASF_EXE=<"%CACHE%"
 if defined ASF_EXE if not exist "%ASF_EXE%" set "ASF_EXE="
 
 if not defined ASF_EXE (
@@ -34,8 +39,8 @@ if not defined ASF_EXE (
 
 :asf_found
 if not defined ASF_EXE (
-    echo ASF path was not found automatically.
-    echo Select ArchiSteamFarm.exe, or cancel to continue without ASF.
+    echo ASF was not found automatically.
+    echo Select ArchiSteamFarm.exe, or cancel to start Telegram bot without ASF.
     powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Add-Type -AssemblyName System.Windows.Forms; $d=New-Object System.Windows.Forms.OpenFileDialog; $d.Title='Select ArchiSteamFarm.exe (Cancel to continue without ASF)'; $d.Filter='ArchiSteamFarm.exe|ArchiSteamFarm.exe|Executable files (*.exe)|*.exe'; if($d.ShowDialog() -eq 'OK'){Write-Output $d.FileName}" > "%TEMP%\cardbot_asf_path.txt"
     if exist "%TEMP%\cardbot_asf_path.txt" set /p ASF_EXE=<"%TEMP%\cardbot_asf_path.txt"
     del "%TEMP%\cardbot_asf_path.txt" >nul 2>&1
