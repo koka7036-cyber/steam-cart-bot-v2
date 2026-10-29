@@ -13,7 +13,7 @@ echo.
 echo Log: "%LOG%"
 echo.
 
-REM ASF is optional. The Telegram bot must still be attempted if ASF is absent.
+REM ASF auto-discovery: cached path, configured path, Desktop known folders (including OneDrive), then common folders.
 set "ASF_EXE="
 set "CACHE=%~dp0.asf_path.txt"
 set "PICK=%TEMP%\cardbot_asf_path.txt"
@@ -21,18 +21,31 @@ if defined CARD_BOT_ASF_DIR if exist "%CARD_BOT_ASF_DIR%\ArchiSteamFarm.exe" set
 if not defined ASF_EXE if exist "%CACHE%" set /p ASF_EXE=<"%CACHE%"
 if defined ASF_EXE if not exist "%ASF_EXE%" set "ASF_EXE="
 
+REM Resolve actual Windows Desktop path (may be OneDrive\Desktop instead of USERPROFILE\Desktop).
 if not defined ASF_EXE (
+  for /f "usebackq delims=" %%D in (`powershell.exe -NoProfile -Command "[Environment]::GetFolderPath('Desktop')" 2^>nul`) do set "DESKTOP_REAL=%%D"
   for %%P in (
     "%~dp0ArchiSteamFarm.exe"
     "%~dp0ASF\ArchiSteamFarm.exe"
     "%~dp0ASF-win-x64\ArchiSteamFarm.exe"
     "%~dp0ASF-win-x64 (1)\ArchiSteamFarm.exe"
+    "%DESKTOP_REAL%\ASF-win-x64\ArchiSteamFarm.exe"
+    "%DESKTOP_REAL%\ASF-win-x64 (1)\ArchiSteamFarm.exe"
     "%USERPROFILE%\Desktop\ASF-win-x64\ArchiSteamFarm.exe"
     "%USERPROFILE%\Desktop\ASF-win-x64 (1)\ArchiSteamFarm.exe"
+    "%OneDrive%\Desktop\ASF-win-x64\ArchiSteamFarm.exe"
+    "%OneDrive%\Desktop\ASF-win-x64 (1)\ArchiSteamFarm.exe"
     "C:\CardBot\ASF\ArchiSteamFarm.exe"
     "C:\CardBot\ASF-win-x64\ArchiSteamFarm.exe"
     "C:\CardBot\ASF-win-x64 (1)\ArchiSteamFarm.exe"
   ) do if exist "%%~P" (set "ASF_EXE=%%~P" & goto :asf_found)
+)
+
+REM Fallback recursive search in likely user folders; this also catches renamed ASF folders.
+if not defined ASF_EXE (
+  echo Searching Desktop, Downloads, and C:\CardBot for ArchiSteamFarm.exe...
+  >> "%LOG%" echo [%date% %time%] Running fallback ASF search.
+  for /f "usebackq delims=" %%F in (`powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$roots=@([Environment]::GetFolderPath('Desktop'), (Join-Path $env:USERPROFILE 'Downloads'), 'C:\CardBot', $env:OneDrive); $roots=$roots | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -Unique; foreach($root in $roots){ $hit=Get-ChildItem -LiteralPath $root -Filter 'ArchiSteamFarm.exe' -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1; if($hit){$hit.FullName; break} }" 2^>nul`) do if not defined ASF_EXE set "ASF_EXE=%%F"
 )
 
 :asf_found
@@ -46,8 +59,8 @@ if not defined ASF_EXE (
 )
 
 if defined ASF_EXE if exist "%ASF_EXE%" (
-  echo [INFO] ASF selected: "%ASF_EXE%"
-  >> "%LOG%" echo [%date% %time%] ASF selected: "%ASF_EXE%"
+  echo [INFO] ASF found: "%ASF_EXE%"
+  >> "%LOG%" echo [%date% %time%] ASF found: "%ASF_EXE%"
   >"%CACHE%" echo %ASF_EXE%
   tasklist /FI "IMAGENAME eq ArchiSteamFarm.exe" 2>NUL | find /I "ArchiSteamFarm.exe" >NUL
   if errorlevel 1 (
