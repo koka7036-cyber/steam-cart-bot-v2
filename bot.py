@@ -451,13 +451,14 @@ def migrate_funpay_delivery_config():
     if cfg.get("delivery_input_mode") != "chat_only":
         cfg["delivery_input_mode"] = "chat_only"
         changed = True
-    if cfg.get("allow_chat_trade_url") is not True:
+    # Set safe defaults only when the options have never been configured.
+    # Never force an administrator's explicit OFF choice back to ON at startup.
+    if "allow_chat_trade_url" not in cfg:
         cfg["allow_chat_trade_url"] = True
         changed = True
-    # This is the bot's own delivery switch in funpay_config.json, not FunPay's
-    # built-in automatic-delivery setting on the marketplace.
-    if cfg.get("auto_delivery_funpay") is not True:
-        cfg["auto_delivery_funpay"] = True
+    # This is the bot's own delivery switch, not FunPay's marketplace setting.
+    if "auto_delivery_funpay" not in cfg:
+        cfg["auto_delivery_funpay"] = False
         changed = True
     if int(cfg.get("funpay_workflow_version", 0) or 0) < 3:
         cfg["funpay_workflow_version"] = 3
@@ -1635,6 +1636,11 @@ def build_admin_keyboard():
         fp_key = str(fp_cfg.get("golden_key", "")).strip()
         fp_key_label = "🔑 Ключ FunPay: задан 🟢" if fp_key else "🔑 Ключ FunPay: НЕ задан 🔴"
         markup.add(fp_key_label)
+        fp_cfg = load_json(FP_CONFIG_FILE, {})
+        delivery_on = fp_cfg.get("auto_delivery_funpay", False) is True
+        input_on = fp_cfg.get("allow_chat_trade_url", True) is True
+        markup.add("🚦 Автовыдача: ВКЛ 🟢" if delivery_on else "🚦 Автовыдача: ВЫКЛ 🔴")
+        markup.add("📨 Приём ссылок: ВКЛ 🟢" if input_on else "📨 Приём ссылок: ВЫКЛ 🔴")
         markup.add("📋 Панель FunPay — сводка", "📋 Последние заказы FunPay")
         markup.add("🔄 Проверить соединение FunPay", ADMIN_BACK_MENU)
     elif section == "playerok":
@@ -2060,6 +2066,28 @@ def build_funpay_dashboard_markup():
     )
     return markup
 
+
+@bot.message_handler(func=lambda m: m.text in {"🚦 Автовыдача: ВКЛ 🟢", "🚦 Автовыдача: ВЫКЛ 🔴"})
+def toggle_funpay_auto_delivery(message):
+    db = load_json(DB_FILE, {"admin_id": None, "vouchers": {}})
+    if message.chat.id != db.get("admin_id") or message.from_user.id != db.get("admin_id"):
+        return
+    cfg = load_json(FP_CONFIG_FILE, {})
+    cfg["auto_delivery_funpay"] = not (cfg.get("auto_delivery_funpay", False) is True)
+    save_json(FP_CONFIG_FILE, cfg)
+    state = "ВКЛЮЧЕНА" if cfg["auto_delivery_funpay"] else "ВЫКЛЮЧЕНА"
+    bot.send_message(message.chat.id, f"🚦 Автовыдача FunPay {state}.", reply_markup=build_admin_keyboard())
+
+@bot.message_handler(func=lambda m: m.text in {"📨 Приём ссылок: ВКЛ 🟢", "📨 Приём ссылок: ВЫКЛ 🔴"})
+def toggle_funpay_link_input(message):
+    db = load_json(DB_FILE, {"admin_id": None, "vouchers": {}})
+    if message.chat.id != db.get("admin_id") or message.from_user.id != db.get("admin_id"):
+        return
+    cfg = load_json(FP_CONFIG_FILE, {})
+    cfg["allow_chat_trade_url"] = not (cfg.get("allow_chat_trade_url", True) is True)
+    save_json(FP_CONFIG_FILE, cfg)
+    state = "ВКЛЮЧЁН" if cfg["allow_chat_trade_url"] else "ВЫКЛЮЧЕН"
+    bot.send_message(message.chat.id, f"📨 Приём ссылок из чата FunPay {state}.", reply_markup=build_admin_keyboard())
 
 @bot.message_handler(func=lambda m: m.text == "📋 Панель FunPay — сводка")
 def show_funpay_dashboard(message):
