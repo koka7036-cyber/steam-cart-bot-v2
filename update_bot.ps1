@@ -25,19 +25,35 @@ try {
         exit 0
     }
     $headers = @{ 'User-Agent' = 'SteamCardsBot-Updater'; 'Accept' = 'application/vnd.github+json' }
-    # This repository is PRIVATE, so anonymous GitHub API/codeload requests return 404.
-    # Use a token already configured on this PC; never hard-code credentials in the script.
+    # Private repository access: prefer environment token, otherwise use a DPAPI-protected
+    # token file tied to this Windows user. First run prompts once; the token is never logged.
+    $tokenFile = Join-Path $Root '.github_token.dpapi'
     $githubToken = ''
     if ($env:GH_TOKEN) { $githubToken = $env:GH_TOKEN }
     elseif ($env:GITHUB_TOKEN) { $githubToken = $env:GITHUB_TOKEN }
-    else {
-        $gh = Get-Command gh -ErrorAction SilentlyContinue
-        if ($gh) {
-            try { $githubToken = (& gh auth token 2>$null | Select-Object -First 1).Trim() } catch { $githubToken = '' }
+    elseif (Test-Path -LiteralPath $tokenFile) {
+        try {
+            $secureToken = Get-Content -LiteralPath $tokenFile -Raw | ConvertTo-SecureString
+            $ptr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureToken)
+            try { $githubToken = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr) }
+            finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr) }
+        } catch {
+            throw 'Saved GitHub credential cannot be decrypted for this Windows user. Remove .github_token.dpapi and restart to configure it again.'
         }
     }
     if ([string]::IsNullOrWhiteSpace($githubToken)) {
-        throw 'GitHub repository is private, but no authentication token was found. Sign in with GitHub CLI (gh auth login) or set GH_TOKEN for this Windows user. No files were changed.'
+        Write-Host ''
+        Write-Host 'This GitHub repository is private. A read-only GitHub token is required for automatic updates.'
+        Write-Host 'Create a fine-grained token in your browser with access only to this repository and Contents: Read-only.'
+        $secureToken = Read-Host 'Paste GitHub token (input hidden)' -AsSecureString
+        if (-not $secureToken -or $secureToken.Length -eq 0) {
+            throw 'No GitHub token supplied. No files were changed.'
+        }
+        $ptr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureToken)
+        try { $githubToken = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr) }
+        finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr) }
+        # ConvertTo-SecureString/ConvertFrom-SecureString uses Windows DPAPI by default.
+        $secureToken | ConvertFrom-SecureString | Set-Content -LiteralPath $tokenFile -Encoding ASCII
     }
     $headers['Authorization'] = 'Bearer ' + $githubToken
     # Use the commits list endpoint with the branch as a query parameter.
