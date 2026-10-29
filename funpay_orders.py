@@ -6,6 +6,7 @@ keep one reservation per order.
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import html
 import re
@@ -16,6 +17,78 @@ from urllib.parse import parse_qs, urljoin, urlparse
 
 OPEN_STATUSES = {"awaiting_input", "input_received", "reserved", "review", "retry_required"}
 
+
+
+def restore_reserved_assets(cache: dict, reservation: dict) -> dict | None:
+    """Return a safely restored cache, or None without mutating input on invalid data.
+
+    The reservation must contain unique asset IDs and a matching location for
+    every ID. Validation completes before a copy is changed, so malformed data
+    can never partially restore stock.
+    """
+    if not isinstance(cache, dict) or not isinstance(reservation, dict):
+        return None
+    games = cache.get("games")
+    if not isinstance(games, dict) or not games:
+        return None
+
+    asset_ids = reservation.get("asset_ids")
+    locations = reservation.get("asset_locations")
+    if not isinstance(asset_ids, list) or not asset_ids:
+        return None
+    if not isinstance(locations, list) or not locations or len(asset_ids) != len(locations):
+        return None
+
+    normalized_ids = []
+    for asset_id in asset_ids:
+        value = str(asset_id)
+        if not value.isdigit() or value in normalized_ids:
+            return None
+        normalized_ids.append(value)
+
+    normalized_locations = []
+    location_ids = []
+    for item in locations:
+        if not isinstance(item, dict):
+            return None
+        game = item.get("game")
+        card = item.get("card")
+        asset_id = str(item.get("asset_id", ""))
+        if not isinstance(game, str) or not game.strip():
+            return None
+        if not isinstance(card, str) or not card.strip():
+            return None
+        if not asset_id.isdigit() or asset_id in location_ids:
+            return None
+        location_ids.append(asset_id)
+        normalized_locations.append({"game": game, "card": card, "asset_id": asset_id})
+
+    if set(normalized_ids) != set(location_ids):
+        return None
+
+    restored = copy.deepcopy(cache)
+    restored_games = restored["games"]
+    for item in normalized_locations:
+        game_cards = restored_games.get(item["game"], {})
+        if item["game"] in restored_games and not isinstance(game_cards, dict):
+            return None
+        if item["card"] in game_cards and not isinstance(game_cards[item["card"]], list):
+            return None
+
+    for item in normalized_locations:
+        game_cards = restored_games.setdefault(item["game"], {})
+        card_assets = game_cards.setdefault(item["card"], [])
+        if item["asset_id"] not in [str(value) for value in card_assets]:
+            card_assets.append(item["asset_id"])
+
+    restored["total_cards"] = sum(
+        len(asset_ids)
+        for cards in restored_games.values()
+        if isinstance(cards, dict)
+        for asset_ids in cards.values()
+        if isinstance(asset_ids, list)
+    )
+    return restored
 
 
 STEAM_TRADE_URL_RE = re.compile(
