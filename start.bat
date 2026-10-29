@@ -1,22 +1,22 @@
 @echo off
-setlocal
+setlocal EnableExtensions
 chcp 65001 >nul
 title Steam Cards Bot Launcher
 cd /d "%~dp0"
+set "LOG=%~dp0launcher_start.log"
+> "%LOG%" echo [%date% %time%] Launcher started from "%~dp0"
 
 echo ==================================================
 echo Steam Cards Bot Launcher
 echo ==================================================
 echo.
+echo Log: "%LOG%"
+echo.
 
 REM ASF is optional for starting the Telegram bot.
-REM Priority: CARD_BOT_ASF_DIR, saved cache, then common local paths.
 set "ASF_EXE="
 set "CACHE=%~dp0.asf_path.txt"
-if defined CARD_BOT_ASF_DIR (
-    if exist "%CARD_BOT_ASF_DIR%\ArchiSteamFarm.exe" set "ASF_EXE=%CARD_BOT_ASF_DIR%\ArchiSteamFarm.exe"
-    if exist "%CARD_BOT_ASF_DIR%" if /I "%~x1"==".exe" set "ASF_EXE=%CARD_BOT_ASF_DIR%"
-)
+if defined CARD_BOT_ASF_DIR if exist "%CARD_BOT_ASF_DIR%\ArchiSteamFarm.exe" set "ASF_EXE=%CARD_BOT_ASF_DIR%\ArchiSteamFarm.exe"
 if not defined ASF_EXE if exist "%CACHE%" set /p ASF_EXE=<"%CACHE%"
 if defined ASF_EXE if not exist "%ASF_EXE%" set "ASF_EXE="
 
@@ -26,6 +26,8 @@ if not defined ASF_EXE (
         "%~dp0ASF\ArchiSteamFarm.exe"
         "%~dp0ASF-win-x64\ArchiSteamFarm.exe"
         "%~dp0ASF-win-x64 (1)\ArchiSteamFarm.exe"
+        "%USERPROFILE%\Desktop\ASF-win-x64\ArchiSteamFarm.exe"
+        "%USERPROFILE%\Desktop\ASF-win-x64 (1)\ArchiSteamFarm.exe"
         "C:\CardBot\ASF\ArchiSteamFarm.exe"
         "C:\CardBot\ASF-win-x64\ArchiSteamFarm.exe"
         "C:\CardBot\ASF-win-x64 (1)\ArchiSteamFarm.exe"
@@ -48,25 +50,45 @@ if not defined ASF_EXE (
 
 if defined ASF_EXE (
     if exist "%ASF_EXE%" (
-        echo [INFO] ASF: "%ASF_EXE%"
-        tasklist /FI "IMAGENAME eq ArchiSteamFarm.exe" 2>NUL | find /I "ArchiSteamFarm.exe" >NUL
-        if errorlevel 1 start "ArchiSteamFarm" "%ASF_EXE%"
+        echo [INFO] ASF selected: "%ASF_EXE%"
+        >> "%LOG%" echo [%date% %time%] ASF selected: "%ASF_EXE%"
         >"%CACHE%" echo %ASF_EXE%
+        tasklist /FI "IMAGENAME eq ArchiSteamFarm.exe" 2>NUL | find /I "ArchiSteamFarm.exe" >NUL
+        if errorlevel 1 (
+            for %%I in ("%ASF_EXE%") do set "ASF_DIR=%%~dpI"
+            echo [INFO] Starting ASF from its own directory...
+            >> "%LOG%" echo [%date% %time%] Starting ASF with working directory "%ASF_DIR%"
+            start "ArchiSteamFarm" /D "%ASF_DIR%" "%ASF_EXE%"
+            timeout /t 2 /nobreak >nul
+        ) else (
+            echo [INFO] ASF is already running.
+            >> "%LOG%" echo [%date% %time%] ASF already running.
+        )
     ) else (
-        echo [WARN] ASF path is invalid. Continuing without ASF.
+        echo [WARN] Saved ASF path is invalid. Continuing without ASF.
+        >> "%LOG%" echo [%date% %time%] Invalid ASF path: "%ASF_EXE%"
     )
 ) else (
     echo [WARN] ASF not selected. Continuing with Telegram bot only.
+    >> "%LOG%" echo [%date% %time%] ASF not selected; continuing bot-only.
 )
 
 echo.
-echo Starting Telegram bot from:
-echo "%~dp0"
 if not exist "%~dp0run_bot.ps1" (
     echo [ERROR] run_bot.ps1 not found beside this launcher.
+    >> "%LOG%" echo [%date% %time%] ERROR: run_bot.ps1 missing.
+    echo See launcher_start.log for details.
     pause
     exit /b 2
 )
-start "Steam Cards Telegram Bot" powershell.exe -NoProfile -NoExit -ExecutionPolicy Bypass -File "%~dp0run_bot.ps1"
-echo Launch command sent. Check the Telegram bot window for its startup result.
+
+echo Starting Telegram bot from "%~dp0" ...
+>> "%LOG%" echo [%date% %time%] Starting run_bot.ps1
+powershell.exe -NoProfile -NoExit -ExecutionPolicy Bypass -File "%~dp0run_bot.ps1"
+set "BOT_EXIT=%ERRORLEVEL%"
+>> "%LOG%" echo [%date% %time%] run_bot.ps1 window exited with code %BOT_EXIT%
+echo.
+echo Launcher finished. Log saved to:
+echo "%LOG%"
+pause
 endlocal
