@@ -2329,11 +2329,12 @@ def handle_all_messages(message):
             cfg = load_json(FP_CONFIG_FILE, {})
             playerok_configured = bool(os.getenv("PLAYEROK_TOKEN", "").strip())
             diagnostics = (
-                "🔎 <b>Диагностика</b>\\n"
-                f"FunPay: {'ключ настроен' if str(cfg.get('golden_key', '')).strip() else 'ключ не задан'}\\n"
-                f"Playerok: {'токен задан' if playerok_configured else 'не настроен'}\\n"
-                f"Автозапуск Windows: {'включён' if is_autostart_enabled() else 'выключен'}\\n"
-                "Автовыдача FunPay: приостановлена защитой модерации.\\n"
+                "🔎 <b>Диагностика</b>\n"
+                f"FunPay: {'ключ настроен' if str(cfg.get('golden_key', '')).strip() else 'ключ не задан'}\n"
+                f"Playerok: {'токен задан' if playerok_configured else 'не настроен'}\n"
+                f"Автозапуск Windows: {'включён' if is_autostart_enabled() else 'выключен'}\n"
+                f"Приём Steam trade-ссылок в чате FunPay: {'включён' if cfg.get('allow_chat_trade_url', True) is True else 'выключен'}\n"
+                f"Автовыдача FunPay: {'включена настройкой' if cfg.get('auto_delivery_funpay', False) is True else 'выключена настройкой'}; фактическая выдача может быть ограничена защитой модерации.\n"
                 "Автовыдача Playerok: выключена."
             )
             bot.send_message(message.chat.id, diagnostics, reply_markup=build_admin_keyboard(), parse_mode="HTML")
