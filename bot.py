@@ -412,7 +412,7 @@ def send_funpay_chat_message(node_id, text):
         return False, f"Ошибка отправки: {e}"
 
 from order_parser import detect_order_sets_and_quantity, is_paid_order_notification
-from funpay_orders import (decode_text_attachment, extract_last_chat_message_fragment, extract_steam_trade_url, extract_text_attachment_href, filter_reserved_assets, find_open_order_for_chat, funpay_cold_start_blockers, inventory_cache_freshness_error, is_funpay_system_message, mark_input_received, register_payment, message_signature, voucher_redemption_block_reason, voucher_reset_block_reason)
+from funpay_orders import (decode_text_attachment, extract_last_chat_message_fragment, extract_steam_trade_url, extract_text_attachment_href, filter_reserved_assets, find_open_order_for_chat, funpay_cold_start_blockers, inventory_cache_freshness_error, is_funpay_system_message, mark_input_received, register_payment, message_signature, restore_reserved_assets, voucher_redemption_block_reason, voucher_reset_block_reason)
 from sales_analytics import summarize_sales
 from playerok_orders import (
     active_orders_for_chat,
@@ -503,27 +503,16 @@ def recover_interrupted_funpay_deliveries():
 
 
 def restore_reservation_to_cache(reservation):
-    """Restore a reservation only after verified cancellation/return of the Steam offer."""
-    locations = reservation.get("asset_locations", []) if isinstance(reservation, dict) else []
-    if not locations:
-        return False
+    """Atomically validate and restore a complete reservation after verified return."""
     with delivery_lock:
         cache = load_json(CACHE_FILE, {})
-        games = cache.get("games", {})
-        for item in locations:
-            game = item.get("game")
-            card = item.get("card")
-            asset_id = str(item.get("asset_id", ""))
-            if not game or not card or not asset_id:
-                continue
-            game_cards = games.setdefault(game, {})
-            card_assets = game_cards.setdefault(card, [])
-            if asset_id not in card_assets:
-                card_assets.append(asset_id)
-        cache["total_cards"] = sum(
-            len(asset_ids) for cards in games.values() for asset_ids in cards.values()
-        )
-        save_json(CACHE_FILE, cache)
+        restored_cache = restore_reserved_assets(cache, reservation)
+        if restored_cache is None:
+            logging.error(
+                "Refusing to restore malformed/incomplete FunPay reservation; cache unchanged."
+            )
+            return False
+        save_json(CACHE_FILE, restored_cache)
     return True
 
 
