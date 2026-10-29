@@ -1995,7 +1995,7 @@ def set_fp_key(message):
     # Buyers are never directed to Telegram or an external file-hosting service.
     config["delivery_input_mode"] = "both"
     config["allow_chat_trade_url"] = True
-    config["auto_delivery_funpay"] = True
+    config.setdefault("auto_delivery_funpay", False)
     config["funpay_workflow_version"] = 2
     save_json(FP_CONFIG_FILE, config)
     bot.send_message(message.chat.id, "⏳ Проверяю ключ `golden_key` на FunPay...", parse_mode="Markdown")
