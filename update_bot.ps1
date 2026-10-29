@@ -25,8 +25,15 @@ try {
         exit 0
     }
     $headers = @{ 'User-Agent' = 'SteamCardsBot-Updater'; 'Accept' = 'application/vnd.github+json' }
-    $commitUrl = "https://api.github.com/repos/$Repo/commits/$Branch"
-    $remote = Invoke-RestMethod -Uri $commitUrl -Headers $headers -TimeoutSec 25
+    # Encode the slash in the branch name explicitly; otherwise some proxies/API
+    # layers misroute refs containing multiple path segments and return a false 404.
+    $encodedBranch = [Uri]::EscapeDataString($Branch)
+    $commitUrl = "https://api.github.com/repos/$Repo/commits/$encodedBranch"
+    try {
+        $remote = Invoke-RestMethod -Uri $commitUrl -Headers $headers -TimeoutSec 25
+    } catch {
+        throw ("Не удалось прочитать commit GitHub (URL: $commitUrl). Проверь доступность репозитория/ветки и подключение. Исходная ошибка: " + $_.Exception.Message)
+    }
     $remoteSha = [string]$remote.sha
     if ([string]::IsNullOrWhiteSpace($remoteSha) -or $remoteSha -notmatch '^[0-9a-f]{40}$') {
         throw 'GitHub returned an invalid commit SHA.'
@@ -42,8 +49,12 @@ try {
     try {
         $zip = Join-Path $tempRoot 'source.zip'
         $extract = Join-Path $tempRoot 'source'
-        $zipUrl = "https://github.com/$Repo/archive/refs/heads/$Branch.zip"
-        Invoke-WebRequest -Uri $zipUrl -OutFile $zip -Headers @{ 'User-Agent' = 'SteamCardsBot-Updater' } -TimeoutSec 90
+        $zipUrl = "https://codeload.github.com/$Repo/zip/refs/heads/$encodedBranch"
+        try {
+            Invoke-WebRequest -Uri $zipUrl -OutFile $zip -Headers @{ 'User-Agent' = 'SteamCardsBot-Updater' } -TimeoutSec 90
+        } catch {
+            throw ("Не удалось скачать архив ветки с GitHub (URL: $zipUrl). Проверь доступность репозитория/ветки. Исходная ошибка: " + $_.Exception.Message)
+        }
         Expand-Archive -LiteralPath $zip -DestinationPath $extract -Force
         $source = Get-ChildItem -LiteralPath $extract -Directory | Select-Object -First 1
         if (-not $source) { throw 'Downloaded archive has no source directory.' }
