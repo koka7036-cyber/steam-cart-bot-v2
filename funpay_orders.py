@@ -499,9 +499,9 @@ def funpay_input_signature(node_id: str, sender_name: str, message_fragment: str
     """
     raw_fragment = message_fragment or ""
     visible_fragment = html.unescape(re.sub(r"<[^>]+>", " ", raw_fragment))
-    visible_fragment = re.sub(r"\\s+", " ", visible_fragment).strip()
-    text = re.sub(r"\\s+", " ", (message_text or "").strip())
-    stable_id_match = re.search(r"\\bdata-(?:message-)?id\\s*=\\s*(['\\\"])(.*?)\\1", raw_fragment, re.IGNORECASE)
+    visible_fragment = re.sub(r"\s+", " ", visible_fragment).strip()
+    text = re.sub(r"\s+", " ", (message_text or "").strip())
+    stable_id_match = re.search(r"\bdata-(?:message-)?id\s*=\s*(['\"])(.*?)\1", raw_fragment, re.IGNORECASE)
     stable_id = stable_id_match.group(2) if stable_id_match else ""
     digest = hashlib.sha256(f"{node_id}|{sender_name}|{stable_id}|{visible_fragment}|{text}".encode("utf-8", errors="replace")).hexdigest()
     return digest
