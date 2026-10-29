@@ -264,6 +264,18 @@ class _LastChatMessageParser(HTMLParser):
             self._parts.append(f"<!--{data}-->")
 
 
+
+def extract_chat_message_fragments(html_document: str) -> list[str]:
+    """Return all top-level chat message wrappers in chronological page order."""
+    parser = _LastChatMessageParser()
+    try:
+        parser.feed(html_document or "")
+        parser.close()
+    except Exception:
+        return []
+    return list(parser.messages)
+
+
 def extract_last_chat_message_fragment(html_document: str) -> str | None:
     """Return only the newest chat message wrapper, so an older URL cannot trigger delivery for a newer file."""
     parser = _LastChatMessageParser()
@@ -543,6 +555,22 @@ def register_payment(orders: dict, *, node_id: str, buyer: str, text: str,
     }
     orders[key] = record
     return record, True
+
+
+
+def open_orders_for_chat(orders: dict, node_id: str) -> list[dict]:
+    """Return all open orders for a chat in stable oldest-first order.
+
+    The caller must not guess between multiple candidates; this list is used to
+    present an explicit admin disambiguation choice.
+    """
+    candidates = [
+        item for item in orders.values()
+        if isinstance(item, dict)
+        and str(item.get("node_id")) == str(node_id)
+        and item.get("status") in OPEN_STATUSES
+    ]
+    return sorted(candidates, key=lambda item: (int(item.get("created_at", 0) or 0), str(item.get("key", ""))))
 
 
 def find_open_order_for_chat(orders: dict, node_id: str) -> dict | None:
