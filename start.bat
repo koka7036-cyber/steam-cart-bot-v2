@@ -9,23 +9,21 @@ echo Steam Cards Bot Launcher
 echo ==================================================
 echo.
 
-REM ASF is optional for starting the Telegram bot. If a saved path exists,
-REM use it; otherwise try a few common locations and offer a file picker.
+REM ASF is optional for starting the Telegram bot.
 set "ASF_EXE="
 set "CACHE=%~dp0.asf_path.txt"
 if exist "%CACHE%" set /p ASF_EXE=<"%CACHE%"
-
 if defined ASF_EXE if not exist "%ASF_EXE%" set "ASF_EXE="
 
 if not defined ASF_EXE (
     for %%P in (
         "%~dp0ArchiSteamFarm.exe"
-        "%~dp0ASFArchiSteamFarm.exe"
-        "%~dp0ASF-win-x64ArchiSteamFarm.exe"
-        "%~dp0ASF-win-x64 (1)ArchiSteamFarm.exe"
-        "C:CardBotASFArchiSteamFarm.exe"
-        "C:CardBotASF-win-x64ArchiSteamFarm.exe"
-        "C:CardBotASF-win-x64 (1)ArchiSteamFarm.exe"
+        "%~dp0ASF\ArchiSteamFarm.exe"
+        "%~dp0ASF-win-x64\ArchiSteamFarm.exe"
+        "%~dp0ASF-win-x64 (1)\ArchiSteamFarm.exe"
+        "C:\CardBot\ASF\ArchiSteamFarm.exe"
+        "C:\CardBot\ASF-win-x64\ArchiSteamFarm.exe"
+        "C:\CardBot\ASF-win-x64 (1)\ArchiSteamFarm.exe"
     ) do (
         if exist "%%~P" (
             set "ASF_EXE=%%~P"
@@ -37,9 +35,8 @@ if not defined ASF_EXE (
 :asf_found
 if not defined ASF_EXE (
     echo ASF path was not found automatically.
-    echo You can select ArchiSteamFarm.exe, or continue without ASF.
-    powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Add-Type -AssemblyName System.Windows.Forms; $d=New-Object System.Windows.Forms.OpenFileDialog; $d.Title='Select ArchiSteamFarm.exe (Cancel to continue without ASF)'; $d.Filter='ArchiSteamFarm.exe|ArchiSteamFarm.exe|Executable files (*.exe)|*.exe'; if($d.ShowDialog() -eq 'OK'){[IO.File]::WriteAllText((Join-Path $env:CARDBOT_LAUNCHER_DIR '.asf_path.txt'),$d.FileName); Write-Output $d.FileName}" > "%TEMP%\cardbot_asf_path.txt"
-    set "CARDBOT_LAUNCHER_DIR=%~dp0"
+    echo Select ArchiSteamFarm.exe, or cancel to continue without ASF.
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Add-Type -AssemblyName System.Windows.Forms; $d=New-Object System.Windows.Forms.OpenFileDialog; $d.Title='Select ArchiSteamFarm.exe (Cancel to continue without ASF)'; $d.Filter='ArchiSteamFarm.exe|ArchiSteamFarm.exe|Executable files (*.exe)|*.exe'; if($d.ShowDialog() -eq 'OK'){Write-Output $d.FileName}" > "%TEMP%\cardbot_asf_path.txt"
     if exist "%TEMP%\cardbot_asf_path.txt" set /p ASF_EXE=<"%TEMP%\cardbot_asf_path.txt"
     del "%TEMP%\cardbot_asf_path.txt" >nul 2>&1
 )
@@ -49,7 +46,7 @@ if defined ASF_EXE (
         echo [INFO] ASF: "%ASF_EXE%"
         tasklist /FI "IMAGENAME eq ArchiSteamFarm.exe" 2>NUL | find /I "ArchiSteamFarm.exe" >NUL
         if errorlevel 1 start "ArchiSteamFarm" "%ASF_EXE%"
-        if not exist "%CACHE%" >"%CACHE%" echo %ASF_EXE%
+        >"%CACHE%" echo %ASF_EXE%
     ) else (
         echo [WARN] ASF path is invalid. Continuing without ASF.
     )
