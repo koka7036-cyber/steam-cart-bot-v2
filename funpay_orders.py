@@ -17,6 +17,23 @@ from urllib.parse import parse_qs, urljoin, urlparse
 
 OPEN_STATUSES = {"awaiting_input", "input_received", "reserved", "review", "retry_required"}
 
+def count_cancelled_orders(orders) -> int:
+    """Count cancelled/refunded FunPay orders once, including legacy refund flags."""
+    if isinstance(orders, dict):
+        values = orders.values()
+    elif isinstance(orders, (list, tuple)):
+        values = orders
+    else:
+        return 0
+    return sum(
+        1 for order in values
+        if isinstance(order, dict) and (
+            order.get("status") in {"cancelled", "refunded", "refunded_cancelled"}
+            or order.get("funpay_refunded") is True
+        )
+    )
+
+
 
 
 def restore_reserved_assets(cache: dict, reservation: dict) -> dict | None:
