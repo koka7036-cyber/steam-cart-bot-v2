@@ -827,3 +827,21 @@ def test_payment_and_refund_alerts_are_returned_in_page_order():
     assert is_paid_order_notification(events[0][1])
     assert is_funpay_refund_notification(events[1][1])
 
+
+
+def test_extract_order_number_supports_funpay_refund_wording():
+    from funpay_orders import extract_order_number, payment_key
+
+    refund = "Продавец Koka2010 вернул деньги покупателю Koka20111 по заказу #LB9EF7W7."
+    paid = "Покупатель Koka20111 оплатил заказ #S8QXD5R4."
+
+    assert extract_order_number(refund) == "LB9EF7W7"
+    assert payment_key("297865070", refund) == "fp-order-LB9EF7W7"
+    assert extract_order_number(paid) == "S8QXD5R4"
+
+
+def test_extract_order_number_supports_other_russian_cases():
+    from funpay_orders import extract_order_number
+
+    assert extract_order_number("возврат заказа #ABCD1234") == "ABCD1234"
+    assert extract_order_number("сообщение по заказом #ABCD1234") == "ABCD1234"
