@@ -14,6 +14,20 @@ $Log = Join-Path $Root 'update_bot.log'
 $Marker = Join-Path $Root '.bot_update_commit.txt'
 $CredentialTarget = 'SteamCardsBot-GitHubReadOnly'
 $Backup = Join-Path $Root ('backups\update_' + (Get-Date -Format 'yyyyMMdd_HHmmss'))
+$DeploymentFiles = @(
+            'bot.py', 'funpay_orders.py', 'order_parser.py', 'playerok_monitor.py',
+            'playerok_orders.py', 'runtime_paths.py', 'sales_analytics.py', 'steam_inventory.py',
+            'run_bot.ps1', 'start.bat', 'update_bot.ps1',
+            'requirements.txt', 'requirements-playerok.txt',
+            'configure_playerok.bat', 'configure_playerok.ps1',
+            'install_autostart.ps1', 'setup_windows.ps1',
+            'toggle_autostart_task.ps1', 'repair_updater.bat'
+)
+
+$RequiredDeploymentFiles = @(
+    'bot.py', 'start.bat', 'run_bot.ps1', 'update_bot.ps1', 'steam_inventory.py'
+)
+
 
 function Write-UpdateLog([string]$Message) {
     $line = '[{0}] {1}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Message
@@ -25,6 +39,75 @@ function Get-BotProcesses {
     return @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
         $_.Name -match '^python(w)?\.exe$' -and $_.CommandLine -and $_.CommandLine -match 'bot\.py'
     })
+}
+
+function Get-CardBotGitBlobSha {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return $null
+    }
+
+    $bytes = [IO.File]::ReadAllBytes($Path)
+    $header = [Text.Encoding]::UTF8.GetBytes(('blob {0}' -f $bytes.Length) + [char]0)
+    $payload = New-Object byte[] ($header.Length + $bytes.Length)
+    [Buffer]::BlockCopy($header, 0, $payload, 0, $header.Length)
+    [Buffer]::BlockCopy($bytes, 0, $payload, $header.Length, $bytes.Length)
+
+    $sha1 = [Security.Cryptography.SHA1]::Create()
+    try {
+        return ([BitConverter]::ToString($sha1.ComputeHash($payload))).Replace('-', '').ToLowerInvariant()
+    } finally {
+        $sha1.Dispose()
+        [Array]::Clear($bytes, 0, $bytes.Length)
+        [Array]::Clear($payload, 0, $payload.Length)
+    }
+}
+
+function Test-CardBotTreeIntegrity {
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)][string[]]$Paths,
+        [Parameter(Mandatory = $true)][string[]]$RequiredPaths,
+        [Parameter(Mandatory = $true)][hashtable]$RemoteTree
+    )
+
+    foreach ($relative in $RequiredPaths) {
+        if (-not $RemoteTree.ContainsKey($relative)) {
+            return [pscustomobject]@{
+                IsValid = $false
+                Reason = ('GitHub commit tree is missing required file: ' + $relative)
+            }
+        }
+    }
+
+    foreach ($relative in $Paths) {
+        $expectedSha = [string]$RemoteTree[$relative]
+        if ([string]::IsNullOrWhiteSpace($expectedSha)) {
+            continue
+        }
+
+        $localPath = Join-Path $Root $relative
+        if (-not (Test-Path -LiteralPath $localPath -PathType Leaf)) {
+            return [pscustomobject]@{
+                IsValid = $false
+                Reason = ('Local deployment file is missing: ' + $relative)
+            }
+        }
+
+        $localSha = Get-CardBotGitBlobSha -Path $localPath
+        if ($localSha -ne $expectedSha) {
+            return [pscustomobject]@{
+                IsValid = $false
+                Reason = ('Local deployment file differs from the selected GitHub commit: ' + $relative)
+            }
+        }
+    }
+
+    return [pscustomobject]@{
+        IsValid = $true
+        Reason = ''
+    }
 }
 
 if (-not ('CardBot.CredentialManager' -as [type])) {
@@ -165,19 +248,40 @@ try {
         Write-UpdateLog 'GitHub token saved in Windows Credential Manager.'
     }
 
+    $treeUrl = 'https://api.github.com/repos/{0}/git/trees/{1}?recursive=1' -f $Repo, $remoteSha
+    $treeResponse = Invoke-RestMethod -Uri $treeUrl -Headers $headers -TimeoutSec 25
+    if ($treeResponse.truncated) {
+        throw 'GitHub commit tree response was truncated; local files cannot be verified safely.'
+    }
+    $remoteTree = @{}
+    foreach ($entry in @($treeResponse.tree)) {
+        if ($entry.type -eq 'blob' -and $entry.path -and $entry.sha) {
+            $remoteTree[[string]$entry.path] = [string]$entry.sha
+        }
+    }
+
     $localSha = ''
     if (Test-Path -LiteralPath $Marker -PathType Leaf) {
         $localSha = (Get-Content -LiteralPath $Marker -Raw -ErrorAction Stop).Trim()
     }
 
-    if (-not $Force -and $localSha -eq $remoteSha) {
-        Write-UpdateLog ('Already current: ' + $remoteSha)
+    $localIntegrity = Test-CardBotTreeIntegrity -Root $Root -Paths $DeploymentFiles -RequiredPaths $RequiredDeploymentFiles -RemoteTree $remoteTree
+    if (-not $localIntegrity.IsValid) {
+        Write-UpdateLog ('Local file integrity check failed: ' + $localIntegrity.Reason)
+    }
+
+    if (-not $Force -and $localSha -eq $remoteSha -and $localIntegrity.IsValid) {
+        Write-UpdateLog ('Already current and local files match GitHub: ' + $remoteSha)
         Write-Output ('CURRENT:' + $remoteSha)
         exit 0
     }
 
     if ($CheckOnly) {
-        Write-UpdateLog ('Update available: ' + $remoteSha)
+        if ($localSha -eq $remoteSha -and -not $localIntegrity.IsValid) {
+            Write-UpdateLog ('Repair available for local files at commit ' + $remoteSha)
+        } else {
+            Write-UpdateLog ('Update available: ' + $remoteSha)
+        }
         Write-Output ('UPDATE_AVAILABLE:' + $remoteSha)
         exit 0
     }
@@ -212,20 +316,10 @@ try {
             throw 'Downloaded GitHub archive has no source directory.'
         }
 
-        $files = @(
-            'bot.py', 'funpay_orders.py', 'order_parser.py', 'playerok_monitor.py',
-            'playerok_orders.py', 'runtime_paths.py', 'sales_analytics.py', 'steam_inventory.py',
-            'run_bot.ps1', 'start.bat', 'update_bot.ps1',
-            'requirements.txt', 'requirements-playerok.txt',
-            'configure_playerok.bat', 'configure_playerok.ps1',
-            'install_autostart.ps1', 'setup_windows.ps1',
-            'toggle_autostart_task.ps1', 'repair_updater.bat'
-        )
-
-        $available = @($files | Where-Object {
+        $available = @($DeploymentFiles | Where-Object {
             Test-Path -LiteralPath (Join-Path $source.FullName $_) -PathType Leaf
         })
-        foreach ($required in @('bot.py', 'steam_inventory.py', 'start.bat', 'run_bot.ps1', 'update_bot.ps1')) {
+        foreach ($required in $RequiredDeploymentFiles) {
             if ($available -notcontains $required) {
                 throw ('Archive is missing required file: ' + $required)
             }
@@ -268,6 +362,12 @@ try {
             foreach ($relative in $available) {
                 Copy-Item -LiteralPath (Join-Path $source.FullName $relative) -Destination (Join-Path $Root $relative) -Force
             }
+
+            $installedIntegrity = Test-CardBotTreeIntegrity -Root $Root -Paths $available -RequiredPaths $RequiredDeploymentFiles -RemoteTree $remoteTree
+            if (-not $installedIntegrity.IsValid) {
+                throw ('Installed files failed GitHub integrity verification: ' + $installedIntegrity.Reason)
+            }
+
             [IO.File]::WriteAllText($Marker, $remoteSha + [Environment]::NewLine, [Text.Encoding]::ASCII)
         } catch {
             Write-UpdateLog ('Copy failed; rolling back from ' + $Backup)
