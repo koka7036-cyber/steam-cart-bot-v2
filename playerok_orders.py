@@ -194,7 +194,10 @@ def upsert_deal(
         )
         if should_update:
             record["platform_status"] = normalized_status
-            if normalized_status in {"confirmed", "rolled_back", "problem"}:
+            if record.get("mapping_conflict"):
+                # Keep conflicting listing/quantity mappings in manual review.
+                record["fulfillment_status"] = "needs_review"
+            elif normalized_status in {"confirmed", "rolled_back", "problem"}:
                 record["fulfillment_status"] = normalized_status
             elif normalized_status == "problem_resolved":
                 record["fulfillment_status"] = "manual_review"
