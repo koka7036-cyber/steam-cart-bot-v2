@@ -755,7 +755,7 @@ def send_funpay_chat_message(node_id, text):
         return False, f"Ошибка отправки: {e}"
 
 from order_parser import detect_order_sets_and_quantity, is_funpay_refund_notification, is_paid_order_notification
-from funpay_orders import (compact_funpay_text, decode_text_attachment, download_text_attachment, extract_order_number, extract_steam_trade_url, extract_text_attachment_href, filter_reserved_assets, find_open_order_for_chat, funpay_cold_start_blockers, funpay_input_signature, inventory_cache_freshness_error, mark_input_received, open_orders_for_chat, parse_funpay_history_payload, register_payment, message_signature, restore_reserved_assets, voucher_redemption_block_reason, voucher_reset_block_reason)
+from funpay_orders import (compact_funpay_text, decode_text_attachment, download_text_attachment, extract_order_number, extract_steam_trade_url, extract_text_attachment_href, filter_reserved_assets, find_open_order_for_chat, funpay_cold_start_blockers, funpay_input_signature, inventory_cache_freshness_error, mark_input_received, open_orders_for_chat, parse_funpay_history_payload, register_payment, message_signature, restore_reserved_assets, summarize_funpay_chat_diagnostics, voucher_redemption_block_reason, voucher_reset_block_reason)
 from sales_analytics import summarize_sales
 from playerok_orders import (
     active_orders_for_chat,
@@ -778,7 +778,7 @@ def load_funpay_orders():
 
 
 def get_funpay_delivery_policy():
-    """Use only ordinary Steam trade URL text sent in the FunPay chat."""
+    """Use a Steam trade URL in chat text or one validated FunPay-hosted text attachment."""
     cfg = load_json(FP_CONFIG_FILE, {})
     return {
         "input_mode": "chat_only",
@@ -2569,6 +2569,230 @@ def funpay_cold_start_cmd(message):
     )
 
 
+@bot.message_handler(commands=["fpdiag"])
+def funpay_chat_diagnostic_cmd(message):
+    """Read-only diagnosis for one FunPay chat; never reserves or sends cards."""
+    db = load_json(DB_FILE, {"admin_id": None, "vouchers": {}})
+    if (
+        not db.get("admin_id")
+        or message.chat.id != db.get("admin_id")
+        or not message.from_user
+        or message.from_user.id != db.get("admin_id")
+        or message.chat.type != "private"
+    ):
+        return
+
+    parts = (message.text or "").strip().split()
+    if len(parts) != 2 or not parts[1].isdigit():
+        bot.send_message(
+            message.chat.id,
+            "Использование: /fpdiag CHAT_ID\n"
+            "Пример: /fpdiag 297865070\n"
+            "Команда только читает FunPay/журнал/склад и ничего не отправляет в Steam."
+        )
+        return
+
+    node_id = parts[1]
+    bot.send_message(
+        message.chat.id,
+        f"🩺 Проверяю FunPay-чат #{node_id}. Это диагностика без выдачи и без изменения заказа."
+    )
+    lines = [
+        "🩺 ДИАГНОСТИКА FUNPAY — БЕЗ ВЫДАЧИ",
+        f"Чат: #{node_id}",
+    ]
+
+    session, _cfg, session_error = get_fp_session()
+    if session_error:
+        bot.send_message(
+            message.chat.id,
+            "\n".join(lines + [f"❌ Сессия FunPay: {session_error}"]),
+        )
+        return
+
+    try:
+        home = session.get("https://funpay.com/", timeout=15)
+        home.raise_for_status()
+        if "PHPSESSID" in session.cookies:
+            fp_state["phpsessid"] = session.cookies["PHPSESSID"]
+        app_data_match = re.search(r'data-app-data="([^"]+)"', home.text)
+        if not app_data_match:
+            bot.send_message(
+                message.chat.id,
+                "\n".join(lines + ["❌ FunPay не вернул app-data. Проверь golden_key/сессию."]),
+            )
+            return
+        app_data = json.loads(html.unescape(app_data_match.group(1)))
+        if not app_data.get("userId"):
+            bot.send_message(
+                message.chat.id,
+                "\n".join(lines + ["❌ FunPay не подтвердил авторизацию golden_key."]),
+            )
+            return
+
+        history_response = session.get(
+            "https://funpay.com/chat/history",
+            params={
+                "node": node_id,
+                "last_message": "99999999999999999999999",
+            },
+            headers={
+                "Accept": "*/*",
+                "X-Requested-With": "XMLHttpRequest",
+            },
+            timeout=15,
+        )
+        history_response.raise_for_status()
+        timeline = parse_funpay_history_payload(
+            history_response.json(),
+            expected_chat_id=node_id,
+        )
+        if "PHPSESSID" in session.cookies:
+            fp_state["phpsessid"] = session.cookies["PHPSESSID"]
+        fp_state["online"] = True
+        fp_state["error"] = None
+    except Exception as exc:
+        logging.warning(
+            "Read-only FunPay diagnostics failed for node %s: %s",
+            node_id,
+            type(exc).__name__,
+        )
+        bot.send_message(
+            message.chat.id,
+            "\n".join(lines + [
+                f"❌ Не удалось прочитать чат FunPay: {type(exc).__name__}.",
+                "Никаких изменений заказа, склада или Steam не выполнялось.",
+            ]),
+        )
+        return
+
+    orders_data = load_funpay_orders()
+    orders = orders_data.get("orders", {})
+    summary = summarize_funpay_chat_diagnostics(timeline, orders, node_id)
+    policy = get_funpay_delivery_policy()
+
+    buyer_id = summary.get("buyer_id")
+    latest = summary.get("latest") or {}
+    buyer_input = summary.get("latest_buyer_input") or {}
+    lines.extend([
+        "FunPay API: ✅ доступен",
+        f"ID покупателя в чате: {buyer_id if buyer_id is not None else 'не определён'}",
+        f"История сообщений: {summary.get('message_count', 0)}",
+        (
+            "Последнее событие: "
+            f"{latest.get('author_kind', 'unknown')} "
+            f"(ID {latest.get('message_id') or 'нет'})"
+        ),
+        (
+            "Последнее сообщение покупателя: "
+            f"{'найдено' if buyer_input.get('message_id') else 'нет нового сообщения'}; "
+            f"Steam-ссылка: {'да' if buyer_input.get('has_trade_url') else 'нет'}; "
+            f"текстовое вложение: {'да' if buyer_input.get('has_text_attachment') else 'нет'}"
+        ),
+    ])
+
+    system_lines = []
+    for event in summary.get("system_events", []):
+        event_id = event.get("order_number")
+        if not event_id:
+            continue
+        # The diagnostic shows IDs and states only; it never prints message bodies.
+        record = orders.get(f"fp-order-{event_id}")
+        record_status = record.get("status") if isinstance(record, dict) else None
+        node_match = (
+            str(record.get("node_id")) == str(node_id)
+            if isinstance(record, dict) else False
+        )
+        system_lines.append(
+            f"#{event_id}: "
+            f"{record_status or 'нет записи в журнале'}"
+            + ("; чат совпадает" if node_match else ("; другой чат" if record else ""))
+        )
+    lines.append("Оплата/возвраты: " + ("; ".join(system_lines[:6]) if system_lines else "системных событий с ID заказа нет"))
+
+    open_orders = summary.get("open_orders", [])
+    if open_orders:
+        order_lines = [
+            f"#{item.get('order_number')} — {item.get('status')} — {item.get('sets_total')} сет."
+            for item in open_orders[:6]
+        ]
+        lines.append(f"Активные заказы в этом чате: {len(open_orders)}")
+        lines.extend("  " + item for item in order_lines)
+    else:
+        lines.append("Активные заказы в этом чате: 0")
+
+    cache = load_json(CACHE_FILE, {})
+    try:
+        cache_age_minutes = int(max(0, time.time() - os.path.getmtime(CACHE_FILE)) // 60)
+    except OSError:
+        cache_age_minutes = None
+    freshness_error = inventory_cache_freshness_error(cache)
+    try:
+        effective_cache = apply_reserved_assets_to_cache(
+            cache,
+            orders=orders,
+            vouchers=load_json(DB_FILE, {"admin_id": None, "vouchers": {}}).get("vouchers", {}),
+        )
+        available_sets, _details = count_available_sets(effective_cache)
+    except Exception:
+        available_sets = 0
+        freshness_error = freshness_error or "Не удалось безопасно посчитать доступный склад."
+    lines.append(
+        "Склад: "
+        + (f"{available_sets} полных сетов доступно" if freshness_error is None else "проверка не пройдена")
+        + (f"; кэш {cache_age_minutes} мин. назад" if cache_age_minutes is not None else "; кэш отсутствует")
+    )
+    if freshness_error:
+        lines.append("  Причина: " + freshness_error)
+
+    steam_session = load_json(SESSION_FILE, {})
+    steam_age = time.time() - float(steam_session.get("timestamp", 0) or 0)
+    steam_ok = bool(steam_session.get("steamLoginSecure")) and 0 <= steam_age < 43200
+    lines.append("Steam-сессия: " + ("актуальна по локальному сроку" if steam_ok else "отсутствует/устарела"))
+    asf_ok, _asf_message = asf_command("status")
+    lines.append("ASF: " + ("доступен" if asf_ok else "не отвечает/не запущен"))
+    lines.append("Приём ссылок: " + ("ВКЛ" if policy["allow_chat_trade_url"] else "ВЫКЛ"))
+    lines.append("Автовыдача: " + ("ВКЛ" if policy["auto_delivery"] else "ВЫКЛ"))
+    revision = get_installed_revision()
+    lines.append("Версия программы: " + (revision[:12] if revision else "не определена"))
+
+    blockers = []
+    if not policy["allow_chat_trade_url"]:
+        blockers.append("приём trade-ссылок выключен")
+    if not policy["auto_delivery"]:
+        blockers.append("автовыдача выключена — Steam-отправка заблокирована настройкой")
+    if buyer_id is None:
+        blockers.append("FunPay не удалось определить ID покупателя")
+    if latest.get("author_kind") == "system":
+        blockers.append("последнее событие системное; старую ссылку нельзя использовать повторно")
+    elif latest.get("author_kind") != "buyer":
+        blockers.append("последнее сообщение не подтверждено как сообщение покупателя")
+    elif not buyer_input.get("has_trade_url") and not buyer_input.get("has_text_attachment"):
+        blockers.append("в последнем сообщении покупателя не найдена Steam-ссылка или текстовое вложение")
+    if not open_orders:
+        blockers.append("в журнале нет активного оплаченного заказа для этого чата")
+    elif len(open_orders) > 1:
+        blockers.append("несколько активных заказов — требуется точный выбор")
+    if freshness_error:
+        blockers.append("кэш склада не прошёл проверку свежести/целостности")
+    if open_orders and available_sets < min(
+        int(item.get("sets_total", 0) or 0) for item in open_orders
+    ):
+        blockers.append("доступного склада недостаточно для активного заказа")
+    if not steam_ok:
+        blockers.append("Steam-сессия отсутствует или устарела")
+    if not asf_ok:
+        blockers.append("ASF недоступен")
+
+    lines.append("")
+    lines.append("БЛОКИРУЮЩИЕ ПРИЧИНЫ:")
+    lines.extend("• " + item for item in blockers[:8])
+    if not blockers:
+        lines.append("По read-only проверкам явных блокеров нет. Эта команда не отправляла Steam-предложение.")
+
+    bot.send_message(message.chat.id, "\n".join(lines[:32]))
+
+
 @bot.message_handler(commands=["fporders"])
 def funpay_orders_cmd(message):
     db = load_json(DB_FILE, {"admin_id": None, "vouchers": {}})
@@ -2778,8 +3002,8 @@ def set_fp_key(message):
     config = load_json(FP_CONFIG_FILE, {})
     config["golden_key"] = key
     config["last_raise_ts"] = 0
-    # FunPay trade URLs are accepted only as ordinary text in the order chat.
-    # File attachments and external file hosting are not part of this workflow.
+    # Accept one Steam trade URL from chat text or a small FunPay-hosted text attachment.
+    # External file hosting is never accepted.
     config["delivery_input_mode"] = "chat_only"
     config["allow_chat_trade_url"] = True
     config.setdefault("auto_delivery_funpay", False)
@@ -2791,7 +3015,7 @@ def set_fp_key(message):
         bot.send_message(
             message.chat.id,
             f"✅ **FunPay подключен.** (ID: `{fp_state['user_id']}`)\n"
-            "Автоматизация принимает Steam Trade URL обычным текстом в чате заказа; файлы и внешние ссылки не используются.",
+            "Автоматизация принимает Steam Trade URL обычным сообщением или небольшим текстовым файлом, прикреплённым к чату заказа. Внешние ссылки не используются.",
             reply_markup=build_admin_keyboard(),
             parse_mode="Markdown"
         )
@@ -2819,7 +3043,7 @@ def build_funpay_dashboard_text():
     completed = counts.get("completed", 0)
     cancelled = counts.get("cancelled", 0)
     mode = policy.get("input_mode", "both")
-    mode_label = {"file": "📎 Текстовый файл", "chat": "💬 Чат", "both": "💬 Чат + 📎 текстовый файл"}.get(mode, mode)
+    mode_label = {"file": "📎 Текстовый файл", "chat": "💬 Чат", "both": "💬 Чат + 📎 текстовый файл", "chat_only": "💬 Чат + 📎 текстовый файл"}.get(mode, mode)
 
     return (
         "📊 <b>ПАНЕЛЬ FUNPAY</b>\n"
@@ -2850,6 +3074,9 @@ def build_funpay_dashboard_markup():
     markup.add(
         types.InlineKeyboardButton("🔄 Обновить сводку", callback_data="fpdash_refresh"),
         types.InlineKeyboardButton("📋 Последние заказы", callback_data="fpdash_orders"),
+    )
+    markup.add(
+        types.InlineKeyboardButton("🩺 Диагностика чата", callback_data="fpdiag_help")
     )
     return markup
 
@@ -2889,7 +3116,7 @@ def show_funpay_dashboard(message):
     )
 
 
-@bot.callback_query_handler(func=lambda call: call.data in {"fpdash_refresh", "fpdash_orders"})
+@bot.callback_query_handler(func=lambda call: call.data in {"fpdash_refresh", "fpdash_orders", "fpdiag_help"})
 def funpay_dashboard_callback(call):
     db = load_json(DB_FILE, {"admin_id": None, "vouchers": {}})
     if (
@@ -2898,6 +3125,16 @@ def funpay_dashboard_callback(call):
         or call.from_user.id != db.get("admin_id")
     ):
         bot.answer_callback_query(call.id, "Нет доступа.", show_alert=True)
+        return
+    if call.data == "fpdiag_help":
+        bot.answer_callback_query(call.id, "Диагностика без выдачи.")
+        bot.send_message(
+            call.message.chat.id,
+            "Для проверки конкретной переписки отправь команду:\n"
+            "<code>/fpdiag 297865070</code>\n"
+            "Замени номер на ID нужного чата FunPay. Команда ничего не отправляет в Steam.",
+            parse_mode="HTML",
+        )
         return
     if call.data == "fpdash_orders":
         with funpay_orders_lock:
