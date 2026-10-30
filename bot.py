@@ -275,6 +275,196 @@ def toggle_autostart():
         return True, "🟢 Автозапуск Windows включён."
     return False, "🔴 Автозапуск Windows выключен."
 
+
+# --- TELEGRAM-CONTROLLED BOT UPDATES ---
+UPDATE_SCRIPT_PATH = os.path.join(BASE_DIR, "update_bot.ps1")
+bot_update_lock = threading.Lock()
+update_restart_requested = False
+
+
+def _run_update_check(chat_id, status_message_id):
+    try:
+        env = os.environ.copy()
+        env["CARD_BOT_NONINTERACTIVE"] = "1"
+        result = subprocess.run(
+            [
+                "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive",
+                "-ExecutionPolicy", "Bypass", "-File", UPDATE_SCRIPT_PATH, "-CheckOnly",
+            ],
+            cwd=BASE_DIR,
+            env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=60,
+            check=False,
+        )
+        output = (result.stdout or "") + "\n" + (result.stderr or "")
+        match = re.search(r"(CURRENT|UPDATE_AVAILABLE):([0-9a-f]{40})", output)
+        if result.returncode != 0:
+            lower = output.lower()
+            if "token is not saved" in lower or "credential" in lower and "not saved" in lower:
+                details = (
+                    "GitHub-токен ещё не сохранён. Один раз запусти start.bat вручную "
+                    "из папки бота и введи токен в скрытом запросе PowerShell. "
+                    "После проверки GitHub он сохранится в Windows Credential Manager."
+                )
+            else:
+                details = "GitHub не удалось проверить. Посмотри update_bot.log в папке бота."
+            bot.edit_message_text(
+                "❌ Не удалось проверить обновления.\n" + details,
+                chat_id,
+                status_message_id,
+            )
+            return
+
+        if not match:
+            bot.edit_message_text(
+                "⚠️ GitHub ответил, но версия не распознана. Проверь update_bot.log.",
+                chat_id,
+                status_message_id,
+            )
+            return
+
+        state, remote_sha = match.groups()
+        if state == "CURRENT":
+            bot.edit_message_text(
+                "✅ Бот уже обновлён.\nВерсия main: " + remote_sha[:12],
+                chat_id,
+                status_message_id,
+            )
+            return
+
+        markup = types.InlineKeyboardMarkup()
+        markup.row(
+            types.InlineKeyboardButton(
+                "✅ Обновить сейчас",
+                callback_data="bot_update_confirm:" + remote_sha,
+            ),
+            types.InlineKeyboardButton(
+                "Отмена",
+                callback_data="bot_update_cancel",
+            ),
+        )
+        bot.edit_message_text(
+            "🆕 Доступно обновление бота.\n"
+            "Новая версия main: " + remote_sha[:12] + "\n\n"
+            "Перед установкой файлы будут проверены и сохранены в резервную копию. "
+            "После обновления бот перезапустится. Продолжить?",
+            chat_id,
+            status_message_id,
+            reply_markup=markup,
+        )
+    except subprocess.TimeoutExpired:
+        bot.edit_message_text(
+            "⌛ Проверка GitHub превысила лимит времени. Бот не изменён.",
+            chat_id,
+            status_message_id,
+        )
+    except Exception:
+        logging.exception("Telegram update check failed")
+        try:
+            bot.edit_message_text(
+                "❌ Ошибка проверки обновлений. Бот не изменён; подробности в bot_errors.log.",
+                chat_id,
+                status_message_id,
+            )
+        except Exception:
+            pass
+    finally:
+        if bot_update_lock.locked():
+            bot_update_lock.release()
+
+
+def begin_bot_update_check(chat_id):
+    if not os.path.isfile(UPDATE_SCRIPT_PATH):
+        bot.send_message(chat_id, "❌ Рядом с ботом не найден update_bot.ps1.")
+        return
+    if not bot_update_lock.acquire(blocking=False):
+        bot.send_message(chat_id, "⏳ Проверка или обновление уже выполняется.")
+        return
+    status = bot.send_message(chat_id, "🔎 Проверяю GitHub и доступность обновления. Бот продолжает работать.")
+    threading.Thread(
+        target=_run_update_check,
+        args=(chat_id, status.message_id),
+        daemon=True,
+    ).start()
+
+
+@bot.callback_query_handler(func=lambda call: bool(call.data) and call.data.startswith("bot_update_"))
+def bot_update_callback(call):
+    global restart_requested, update_restart_requested
+
+    db = load_json(DB_FILE, {"admin_id": None, "vouchers": {}})
+    if (
+        not call.message
+        or call.message.chat.id != db.get("admin_id")
+        or not call.from_user
+        or call.from_user.id != db.get("admin_id")
+        or call.message.chat.type != "private"
+    ):
+        bot.answer_callback_query(call.id, "Недостаточно прав.")
+        return
+
+    if call.data == "bot_update_cancel":
+        bot.answer_callback_query(call.id, "Обновление отменено.")
+        try:
+            bot.edit_message_text("Обновление отменено. Текущая версия не изменена.", call.message.chat.id, call.message.message_id)
+        except Exception:
+            pass
+        return
+
+    match = re.fullmatch(r"bot_update_confirm:([0-9a-f]{40})", call.data)
+    if not match:
+        bot.answer_callback_query(call.id, "Некорректная версия. Проверь обновления заново.")
+        return
+    expected_sha = match.group(1)
+
+    if not bot_update_lock.locked():
+        bot.answer_callback_query(call.id, "Проверка устарела. Сначала проверь обновления заново.")
+        return
+
+    bot.answer_callback_query(call.id, "Запускаю безопасное обновление.")
+    bot.send_message(
+        call.message.chat.id,
+        "⏳ Начинаю обновление. Бот остановится, дождётся завершения текущего процесса, "
+        "проверит файлы, создаст резервную копию и запустится снова. "
+        "Автовыдача и реальные продажи автоматически не включаются.",
+    )
+
+    env = os.environ.copy()
+    env["CARD_BOT_NONINTERACTIVE"] = "1"
+    try:
+        log_path = os.path.join(DATA_DIR, "telegram_update.log")
+        log_handle = open(log_path, "a", encoding="utf-8")
+        try:
+            subprocess.Popen(
+                [
+                    "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive",
+                    "-ExecutionPolicy", "Bypass", "-File", UPDATE_SCRIPT_PATH,
+                    "-ExpectedSha", expected_sha, "-WaitForBot", "-Restart",
+                ],
+                cwd=BASE_DIR,
+                env=env,
+                stdin=subprocess.DEVNULL,
+                stdout=log_handle,
+                stderr=subprocess.STDOUT,
+                creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
+                close_fds=True,
+            )
+        finally:
+            log_handle.close()
+    except Exception:
+        logging.exception("Could not start Telegram bot updater")
+        bot.send_message(call.message.chat.id, "❌ Не удалось запустить updater. Бот продолжает работу; подробности в bot_errors.log.")
+        bot_update_lock.release()
+        return
+
+    update_restart_requested = True
+    restart_requested = True
+    threading.Thread(target=lambda: (time.sleep(1), bot.stop_polling()), daemon=True).start()
+
 # --- МОДУЛЬ 2: FUNPAY 24/7 + АВТОБОТ ПРОДАЖ ---
 fp_state = {
     "online": False,
@@ -1739,6 +1929,7 @@ ADMIN_BACK_MENU = "⬅️ Назад"
 admin_menu_state = {}
 pending_steam_password_admin = set()
 restart_requested = False
+update_restart_requested = False
 
 def build_admin_keyboard():
     db = load_json(DB_FILE, {"admin_id": None, "vouchers": {}})
@@ -1773,6 +1964,7 @@ def build_admin_keyboard():
         auto_label = "⚙️ Автозапуск Windows: ВКЛ 🟢" if is_autostart_enabled() else "⚙️ Автозапуск Windows: ВЫКЛ 🔴"
         markup.add(auto_label)
         markup.add("🔐 Авторизация Steam", "🔄 Проверить состояние бота")
+        markup.add("🔎 Проверить обновления")
         markup.add("🔁 Перезапустить бота", ADMIN_BACK_MENU)
     else:
         markup.add("📦 Склад", "🟢 FunPay")
@@ -2511,6 +2703,9 @@ def handle_all_messages(message):
         if text == "🔄 Проверить соединение FunPay":
             bot.send_message(message.chat.id, "Статус подключения отображается в сводке FunPay. Обновление состояния выполняется фоновым монитором.", reply_markup=build_admin_keyboard())
             return
+        if text == "🔎 Проверить обновления":
+            begin_bot_update_check(message.chat.id)
+            return
         if text == "🔁 Перезапустить бота":
             bot.send_message(message.chat.id, "♻️ Перезапускаю Telegram-бота. Windows запустит его снова.")
             restart_requested = True
@@ -2693,7 +2888,7 @@ try:
     start_playerok_monitor()
     bot.infinity_polling()
     if restart_requested:
-        raise SystemExit(42)
+        raise SystemExit(43 if update_restart_requested else 42)
 finally:
     import ctypes
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
