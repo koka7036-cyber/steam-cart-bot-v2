@@ -13,7 +13,7 @@ if ($scriptText -notmatch 'SteamCardsBot-GitHubReadOnly') { throw 'Credential Ma
 if ($scriptText -notmatch 'CredReadW' -or $scriptText -notmatch 'CredWriteW') { throw 'Credential Manager native read/write APIs are missing.' }
 $apiIndex = $scriptText.IndexOf('$remoteCommits = Invoke-RestMethod')
 $shaIndex = $scriptText.IndexOf('GitHub returned an invalid commit SHA.')
-$saveIndex = $scriptText.IndexOf("[CardBot.CredentialManager]::Write($credentialTarget, 'github-readonly', $githubToken)")
+$saveIndex = $scriptText.IndexOf('[CardBot.CredentialManager]::Write($credentialTarget, ''github-readonly'', $githubToken)')
 if ($apiIndex -lt 0 -or $shaIndex -lt $apiIndex -or $saveIndex -lt $shaIndex) {
     throw 'A newly entered token must be saved only after a valid GitHub SHA is returned.'
 }
