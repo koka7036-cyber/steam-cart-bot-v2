@@ -197,9 +197,3 @@ public static class CredentialManager {
     Write-Host 'Update failed. The existing bot files were left in place or restored from backup.' -ForegroundColor Red
     exit 1
 }
-
-} catch {
-    Log ("UPDATE FAILED: " + $_.Exception.Message)
-    Write-Host 'Update failed. The existing bot files were left in place or restored from backup.' -ForegroundColor Red
-    exit 1
-}
