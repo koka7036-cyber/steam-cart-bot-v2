@@ -511,3 +511,30 @@ def test_payment_event_with_unrecognized_order_description_is_not_inferred():
     assert len(events) == 1
     assert detect_order_sets_and_quantity(events[0][1]) == (None, 1)
 
+
+def test_extract_paid_order_events_detects_standalone_funpay_payment_alert():
+    from funpay_orders import extract_paid_order_events
+
+    html_doc = (
+        '<div class="alert-info alert alert-with-icon">'
+        '<div>Покупатель Koka20111 оплатил заказ #LB9EF7W7.</div>'
+        '<div>Steam, Предметы, 1 ПОЛНЫЙ СЕТ КАРТОЧЕК STEAM | +100 XP | Карточки, 1 шт.</div>'
+        '</div>'
+        '<div class="chat-msg-item"><div class="chat-msg-text">'
+        'Покупатель Koka20111 оплатил заказ #FAKE12345'
+        '</div></div>'
+    )
+    events = extract_paid_order_events(html_doc)
+
+    assert len(events) == 1
+    fragment, text = events[0]
+    assert is_funpay_system_message(fragment)
+    assert "LB9EF7W7" in text
+    assert detect_order_sets_and_quantity(text) == (1, 1)
+
+
+def test_is_funpay_system_message_accepts_alert_classes_in_any_order():
+    assert is_funpay_system_message(
+        '<div class="alert-info alert-with-icon alert">Заказ оплачен</div>'
+    )
+
