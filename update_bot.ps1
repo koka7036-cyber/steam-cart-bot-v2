@@ -122,6 +122,9 @@ public static class CredentialManager {
         throw ("Не удалось прочитать commit GitHub (URL: $commitUrl). Проверь доступность репозитория/ветки и подключение. Исходная ошибка: " + $_.Exception.Message)
     }
     $remoteSha = [string]$remote.sha
+    if ([string]::IsNullOrWhiteSpace($remoteSha) -or $remoteSha -notmatch '^[0-9a-f]{40}$') {
+        throw 'GitHub returned an invalid commit SHA.'
+    }
     if ([string]::IsNullOrWhiteSpace($remoteSha) -or $remoteSha -notmatch '^[0-9a-f]{40}    $localSha = ''
     if (Test-Path -LiteralPath $Marker) { $localSha = (Get-Content -LiteralPath $Marker -Raw -ErrorAction SilentlyContinue).Trim() }
     if (-not $Force -and $localSha -eq $remoteSha) {
