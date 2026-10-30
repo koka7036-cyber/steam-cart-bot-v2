@@ -184,7 +184,7 @@ try {
 
     if ($WaitForBot) {
         $deadline = (Get-Date).AddSeconds(120)
-        while (((Get-BotProcesses).Count -gt 0 -or @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -and $_.CommandLine -match 'run_bot\.ps1' }).Count -gt 0) -and (Get-Date) -lt $deadline) {
+        while ((Get-BotProcesses).Count -gt 0 -and (Get-Date) -lt $deadline) {
             Start-Sleep -Seconds 1
         }
     }
