@@ -30,23 +30,11 @@ try {
             Write-Host "[ERROR] Python Launcher (py.exe) не найден. Установи Python 3.11+ с python.org и включи Python Launcher." -ForegroundColor Red
             $exitCode = 2
         } else {
-            Write-Host '[1/3] Ожидается пароль Steam. Ввод скрыт.' -ForegroundColor Cyan
-            $securePassword = Read-Host 'Пароль Steam (ввод скрыт; не сохраняется в переменных пользователя)' -AsSecureString
-            Write-Host '[2/3] Пароль введён. Передаю управление боту и начинаю проверку авторизации Steam...' -ForegroundColor Yellow
-            Write-Host '[INFO] Успешный вход будет показан только после подтверждения ответа Steam.' -ForegroundColor DarkGray
-            $passwordPtr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($securePassword)
-            try {
-                $plainPassword = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($passwordPtr)
-                if ([string]::IsNullOrWhiteSpace($plainPassword)) {
-                    Write-Host '[ERROR] Пароль Steam не может быть пустым.' -ForegroundColor Red
-                    $exitCode = 2
-                } else {
-                    [Environment]::SetEnvironmentVariable('STEAM_PASSWORD', $plainPassword, 'Process')
-                }
-            } finally {
-                [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($passwordPtr)
-                $securePassword.Dispose()
-            }
+            # Steam password is intentionally not requested in the console.
+            # Authenticate once from the admin-only Telegram menu; the local session is reused on restart.
+            [Environment]::SetEnvironmentVariable('STEAM_PASSWORD', '', 'Process')
+            Write-Host '[INFO] Steam: используется сохранённая сессия, если она ещё действительна.' -ForegroundColor Cyan
+            Write-Host '[INFO] Если потребуется новый вход, открой Telegram → Настройки → Авторизация Steam.' -ForegroundColor Yellow
             # Playerok settings are optional. A missing token keeps the monitor disabled.
             $optionalNames = @('PLAYEROK_TOKEN', 'PLAYEROK_USER_AGENT', 'PLAYEROK_ITEM_1_SET_ID', 'PLAYEROK_ITEM_5_SET_ID')
             foreach ($name in $optionalNames) {
