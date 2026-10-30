@@ -79,7 +79,7 @@ def test_autostart_embedded_helper_matches_utf8_bom_script_and_refreshes_stale_c
 
 def test_update_check_lock_is_released_on_startup_and_worker_failures():
     source = read_project_file("bot.py")
-    start = source.index("def _run_update_check")
+    start = source.index("def _release_bot_update_lock()")
     end = source.index("@bot.callback_query_handler", start)
     update_block = source[start:end]
     assert "def _release_bot_update_lock()" in update_block
