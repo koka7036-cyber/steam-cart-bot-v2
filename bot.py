@@ -2399,9 +2399,21 @@ def handle_all_messages(message):
         if text == "🔄 Проверить состояние бота":
             cfg = load_json(FP_CONFIG_FILE, {})
             playerok_configured = bool(os.getenv("PLAYEROK_TOKEN", "").strip())
+            steam_session = load_json(SESSION_FILE, {})
+            steam_session_age = time.time() - float(steam_session.get("timestamp", 0) or 0)
+            steam_session_valid = bool(steam_session.get("steamLoginSecure")) and 0 <= steam_session_age < 43200
+            try:
+                cache_age = time.time() - os.path.getmtime(CACHE_FILE)
+                cache_status = f"обновлён {int(cache_age // 60)} мин. назад"
+            except OSError:
+                cache_status = "файл отсутствует"
             diagnostics = (
                 "🔎 <b>Диагностика</b>\n"
-                f"FunPay: {'ключ настроен' if str(cfg.get('golden_key', '')).strip() else 'ключ не задан'}\n"
+                f"Steam: {'сессия действительна' if steam_session_valid else 'нужна авторизация'}; "
+                f"логин {'задан' if STEAM_LOGIN else 'не задан'}, ID {'задан' if STEAM_ID else 'не задан'}\n"
+                f"Кэш склада: {cache_status}\n"
+                f"FunPay: {'онлайн' if fp_state.get('online') else 'не подтверждён'}; "
+                f"{'ключ настроен' if str(cfg.get('golden_key', '')).strip() else 'ключ не задан'}\n"
                 f"Playerok: {'токен задан' if playerok_configured else 'не настроен'}\n"
                 f"Автозапуск Windows: {'включён' if is_autostart_enabled() else 'выключен'}\n"
                 f"Автоподнятие лотов: {fp_state.get('last_raise', 'Нет данных')}\n"
