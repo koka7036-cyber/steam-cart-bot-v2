@@ -382,6 +382,9 @@ def _run_update_check(chat_id, status_message_id):
 
 
 def begin_bot_update_check(chat_id):
+    if update_restart_requested:
+        bot.send_message(chat_id, "⏳ Обновление уже запускается. Дождись перезапуска бота.")
+        return
     if not os.path.isfile(UPDATE_SCRIPT_PATH):
         bot.send_message(chat_id, "❌ Рядом с ботом не найден update_bot.ps1.")
         return
