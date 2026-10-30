@@ -739,7 +739,7 @@ def send_funpay_chat_message(node_id, text):
         return False, f"Ошибка отправки: {e}"
 
 from order_parser import detect_order_sets_and_quantity, is_funpay_refund_notification, is_paid_order_notification
-from funpay_orders import (compact_funpay_text, decode_text_attachment, download_text_attachment, extract_last_customer_message_fragment, extract_order_number, extract_steam_trade_url, extract_text_attachment_href, filter_reserved_assets, find_open_order_for_chat, funpay_cold_start_blockers, funpay_input_signature, inventory_cache_freshness_error, is_funpay_system_message, mark_input_received, open_orders_for_chat, register_payment, message_signature, restore_reserved_assets, voucher_redemption_block_reason, voucher_reset_block_reason)
+from funpay_orders import (compact_funpay_text, decode_text_attachment, download_text_attachment, extract_order_number, extract_steam_trade_url, extract_text_attachment_href, filter_reserved_assets, find_open_order_for_chat, funpay_cold_start_blockers, funpay_input_signature, inventory_cache_freshness_error, mark_input_received, open_orders_for_chat, parse_funpay_history_payload, register_payment, message_signature, restore_reserved_assets, voucher_redemption_block_reason, voucher_reset_block_reason)
 from sales_analytics import summarize_sales
 from playerok_orders import (
     active_orders_for_chat,
@@ -1331,44 +1331,57 @@ def funpay_check_unread_chats():
                 changed = True
                 continue
 
-            # Read the full chat history once. The latest visible entry may be a
-            # seller refund/payment alert rather than a buyer message.
+            # Request FunPay's structured history endpoint. Its JSON author field is
+            # authoritative: author=0 is a system event; the private-chat peer ID
+            # comes from chat.node.name. HTML/CSS alone is not used to guess authors.
             full_text = ""
             last_message_html = ""
+            latest_buyer_message = None
             detail_loaded = False
             try:
-                r_node = s.get(f"https://funpay.com/chat/?node={node_id}", timeout=10)
-                r_node.raise_for_status()
-                detail_html = r_node.text
+                r_history = s.get(
+                    "https://funpay.com/chat/history",
+                    params={
+                        "node": node_id,
+                        "last_message": "99999999999999999999999",
+                    },
+                    headers={
+                        "Accept": "*/*",
+                        "X-Requested-With": "XMLHttpRequest",
+                    },
+                    timeout=15,
+                )
+                r_history.raise_for_status()
+                history_json = r_history.json()
+                timeline = parse_funpay_history_payload(
+                    history_json,
+                    expected_chat_id=node_id,
+                )
                 detail_loaded = True
-
-                # Select the newest ordinary chat message. System alerts are processed
-                # separately below and must never be mistaken for a buyer file/link.
-                last_message_html = extract_last_customer_message_fragment(detail_html) or ""
-                if last_message_html:
-                    full_text = compact_funpay_text(last_message_html)
-                else:
-                    # Compatibility fallback for older FunPay markup without wrappers.
-                    full_msgs = re.findall(r'<div class="chat-msg-text">([\s\S]*?)</div>', detail_html)
-                    if len(full_msgs) == 1 and not is_funpay_system_message(full_msgs[0]):
-                        last_message_html = full_msgs[0]
-                        full_text = compact_funpay_text(last_message_html)
+                latest_buyer_message = timeline["latest_buyer_message"]
+                if latest_buyer_message:
+                    last_message_html = latest_buyer_message["html"]
+                    full_text = latest_buyer_message["text"]
+                elif timeline["buyer_id"] is None:
+                    logging.warning(
+                        "FunPay buyer author ID could not be resolved for chat %s; delivery input ignored.",
+                        node_id,
+                    )
             except Exception as exc:
-                logging.warning("Не удалось прочитать детали чата FunPay #node%s: %s", node_id, type(exc).__name__)
+                logging.warning(
+                    "Не удалось прочитать структурированную историю FunPay #node%s: %s",
+                    node_id,
+                    type(exc).__name__,
+                )
                 continue
 
             if not detail_loaded:
-                logging.warning("Детали чата FunPay #node%s пока недоступны; повторим проверку.", node_id)
                 continue
 
-            # Replay trusted payment and refund events in chronological chat order.
-            try:
-                payment_events = extract_paid_order_events(detail_html)
-            except Exception:
-                payment_events = []
-                logging.exception("Не удалось извлечь историю системных уведомлений FunPay #node%s", node_id)
-
-            for payment_fragment, payment_text in payment_events:
+            # Only author=0 notifications are trusted as paid/refund system events.
+            # Buyer-written lookalike text never becomes payment evidence.
+            for system_event in timeline["system_events"]:
+                payment_text = system_event["text"]
                 if is_funpay_refund_notification(payment_text):
                     refund_state, refund_record = register_funpay_refund(node_id, payment_text)
                     refund_order = extract_order_number(payment_text) or "без номера"
@@ -1411,7 +1424,7 @@ def funpay_check_unread_chats():
                     continue
                 order_no = record.get("funpay_order_number") or record.get("key") or "без номера"
                 logging.info(
-                    "FunPay payment event reconciled: order=%s node=%s sets=%s created=%s status=%s",
+                    "FunPay system payment reconciled: order=%s node=%s sets=%s created=%s status=%s",
                     order_no,
                     node_id,
                     record.get("sets_total"),
@@ -1445,7 +1458,7 @@ def funpay_check_unread_chats():
                 or re.search(r"\b(?:файл|вложение|attachment)\b", msg_preview, re.IGNORECASE)
             )
 
-            if not last_message_html or (not full_text.strip() and not attachment_href and not has_file):
+            if not latest_buyer_message or (not full_text.strip() and not attachment_href and not has_file):
                 # A latest system alert is not buyer input. Cancel any stale in-memory
                 # order-selection prompt for this chat; an older URL must not survive a refund.
                 for token, pending in list(pending_funpay_input_selections.items()):
@@ -1457,7 +1470,11 @@ def funpay_check_unread_chats():
                 continue
 
             input_signature = funpay_input_signature(
-                node_id, sender_name, last_message_html, full_text
+                node_id,
+                sender_name,
+                last_message_html,
+                full_text,
+                message_id=latest_buyer_message.get("id"),
             )
             if seen_input_events.get(node_id) == input_signature:
                 seen_msgs[node_id] = sig
@@ -1466,8 +1483,13 @@ def funpay_check_unread_chats():
                 continue
 
             lower_txt = full_text.lower()
-            trade_url = extract_steam_trade_url(full_text)
-            contains_trade_url = "steamcommunity.com/tradeoffer/new" in lower_txt
+            # Support both plain-text URLs and URLs represented only by an
+            # anchor href in FunPay's message HTML. The author was already verified.
+            trade_url = extract_steam_trade_url(full_text) or extract_steam_trade_url(last_message_html)
+            contains_trade_url = (
+                "steamcommunity.com/tradeoffer/new" in lower_txt
+                or "steamcommunity.com/tradeoffer/new" in last_message_html.lower()
+            )
             input_kind = "chat_trade_url"
             input_error = None
 

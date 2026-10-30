@@ -94,15 +94,20 @@ def test_legacy_warehouse_button_label_routes_to_stock_menu():
     assert '"📦 Склад": "stock"' in source
 
 
-def test_funpay_watcher_selects_last_customer_message_and_bounds_telegram_notice():
+def test_funpay_watcher_uses_trusted_history_and_bounds_telegram_notice():
     source = read_project_file("bot.py")
     start = source.index("def funpay_check_unread_chats")
-    end = source.index("def funpay_background_worker", start)
+    end = source.index("def handle_funpay_order_selection", start)
     watcher = source[start:end]
-    assert "extract_last_customer_message_fragment(detail_html)" in watcher
-    assert "if not last_message_html or (not full_text.strip() and not attachment_href and not has_file):" in watcher
+    assert '"https://funpay.com/chat/history"' in watcher
+    assert "parse_funpay_history_payload(" in watcher
+    assert 'timeline["system_events"]' in watcher
+    assert 'timeline["latest_buyer_message"]' in watcher
+    assert 'message_id=latest_buyer_message.get("id")' in watcher
+    assert "extract_paid_order_events(" not in watcher
+    assert "extract_last_customer_message_fragment(" not in watcher
+    assert "if not latest_buyer_message or (not full_text.strip() and not attachment_href and not has_file):" in watcher
     assert "compact_funpay_text(safe_text, max_chars=900)" in watcher
-    assert "payment_events = extract_paid_order_events(detail_html)" in watcher
     assert "download_text_attachment(" in watcher
     assert 'input_kind = "text_attachment"' in watcher
     assert "seen_input_events[node_id] = input_signature" in watcher
@@ -137,3 +142,41 @@ def test_refunded_orders_are_not_recreated_from_later_payment_history():
     payment = source[start:end]
     assert 'if order_number and str(order_number).upper() in refunds:' in payment
     assert 'return None, False' in payment
+
+
+def test_funpay_watcher_uses_structured_history_and_numeric_author_filtering():
+    source = read_project_file("bot.py")
+    start = source.index("def funpay_check_unread_chats")
+    end = source.index("def handle_funpay_order_selection", start)
+    watcher = source[start:end]
+
+    assert 'https://funpay.com/chat/history' in watcher
+    assert "parse_funpay_history_payload(" in watcher
+    assert 'timeline["system_events"]' in watcher
+    assert 'timeline["latest_buyer_message"]' in watcher
+    assert 'message_id=latest_buyer_message.get("id")' in watcher
+    assert "extract_paid_order_events(" not in watcher
+    assert "extract_last_customer_message_fragment(" not in watcher
+
+
+def test_funpay_payment_events_are_only_accepted_from_structured_system_author():
+    source = read_project_file("funpay_orders.py")
+    parser_start = source.index("def parse_funpay_history_payload")
+    parser_end = source.index("def extract_last_customer_message_fragment", parser_start)
+    parser = source[parser_start:parser_end]
+
+    assert "author_id == 0" in parser
+    assert "author_id == buyer_id" in parser
+    assert 'latest = messages[-1]' in parser
+    assert 'latest_buyer = latest if latest and latest["is_buyer"] else None' in parser
+
+
+
+
+def test_funpay_watcher_extracts_plain_text_or_anchor_href_trade_url():
+    source = read_project_file("bot.py")
+    start = source.index("def funpay_check_unread_chats")
+    end = source.index("def handle_funpay_order_selection", start)
+    watcher = source[start:end]
+    assert "extract_steam_trade_url(full_text) or extract_steam_trade_url(last_message_html)" in watcher
+

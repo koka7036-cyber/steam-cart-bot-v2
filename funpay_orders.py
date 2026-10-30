@@ -360,6 +360,85 @@ def extract_chat_message_fragments(html_document: str) -> list[str]:
     return list(parser.messages)
 
 
+def parse_funpay_history_payload(payload: dict, expected_chat_id: str | None = None) -> dict:
+    """Parse the official FunPay chat/history JSON response using numeric authors.
+
+    FunPayAPI's public parser identifies system messages by author == 0 and the
+    private-chat interlocutor from chat.node.name.split("-")[2]. Never infer a
+    buyer message from CSS classes or message wording alone.
+    """
+    if not isinstance(payload, dict):
+        raise ValueError("FunPay chat/history response is not a JSON object.")
+    chat = payload.get("chat")
+    if not isinstance(chat, dict):
+        raise ValueError("FunPay chat/history response has no chat object.")
+    node = chat.get("node")
+    if not isinstance(node, dict):
+        raise ValueError("FunPay chat/history response has no chat node.")
+    if expected_chat_id is not None:
+        returned_node_id = node.get("id")
+        if returned_node_id is not None and str(returned_node_id) != str(expected_chat_id):
+            raise ValueError("FunPay returned a different chat node.")
+
+    node_name = str(node.get("name") or "")
+    name_parts = node_name.split("-")
+    buyer_id = None
+    if len(name_parts) >= 3 and name_parts[2].isdigit():
+        buyer_id = int(name_parts[2])
+
+    raw_messages = chat.get("messages")
+    if not isinstance(raw_messages, list):
+        raise ValueError("FunPay chat history messages are missing or invalid.")
+
+    messages = []
+    for raw in raw_messages:
+        if not isinstance(raw, dict):
+            continue
+        try:
+            author_id = int(raw.get("author"))
+        except (TypeError, ValueError):
+            author_id = None
+        message_id_raw = raw.get("id")
+        try:
+            message_id = int(message_id_raw)
+        except (TypeError, ValueError):
+            message_id = None
+        fragment = raw.get("html")
+        if not isinstance(fragment, str):
+            fragment = ""
+        text = compact_funpay_text(fragment)
+        messages.append({
+            "id": message_id,
+            "author_id": author_id,
+            "html": fragment,
+            "text": text,
+            "is_system": author_id == 0,
+            "is_buyer": buyer_id is not None and author_id == buyer_id,
+        })
+
+    # FunPayAPI preserves the API's message order; sorting numeric IDs makes
+    # the newest-event decision explicit and protects against reordered JSON.
+    if messages and all(item["id"] is not None for item in messages):
+        messages.sort(key=lambda item: item["id"])
+
+    system_events = [
+        item for item in messages
+        if item["is_system"] and item["text"]
+    ]
+    latest = messages[-1] if messages else None
+    latest_buyer = latest if latest and latest["is_buyer"] else None
+
+    return {
+        "chat_id": str(expected_chat_id) if expected_chat_id is not None else str(node.get("id") or ""),
+        "node_name": node_name,
+        "buyer_id": buyer_id,
+        "messages": messages,
+        "system_events": system_events,
+        "latest_message": latest,
+        "latest_buyer_message": latest_buyer,
+    }
+
+
 def extract_last_customer_message_fragment(html_document: str) -> str | None:
     """Return the latest timeline event only when it was authored by the buyer.
 
@@ -679,7 +758,13 @@ def payment_key(node_id: str, text: str) -> str:
 
 
 
-def funpay_input_signature(node_id: str, sender_name: str, message_fragment: str, message_text: str = "") -> str:
+def funpay_input_signature(
+    node_id: str,
+    sender_name: str,
+    message_fragment: str,
+    message_text: str = "",
+    message_id: int | str | None = None,
+) -> str:
     """Stable, non-reversible fingerprint for one incoming chat message.
 
     Include the rendered message fragment (which normally includes sender/time metadata)
@@ -691,7 +776,7 @@ def funpay_input_signature(node_id: str, sender_name: str, message_fragment: str
     visible_fragment = re.sub(r"\s+", " ", visible_fragment).strip()
     text = re.sub(r"\s+", " ", (message_text or "").strip())
     stable_id_match = re.search(r"\bdata-(?:message-)?id\s*=\s*(['\"])(.*?)\1", raw_fragment, re.IGNORECASE)
-    stable_id = stable_id_match.group(2) if stable_id_match else ""
+    stable_id = str(message_id) if message_id is not None else (stable_id_match.group(2) if stable_id_match else "")
     digest = hashlib.sha256(f"{node_id}|{sender_name}|{stable_id}|{visible_fragment}|{text}".encode("utf-8", errors="replace")).hexdigest()
     return digest
 
