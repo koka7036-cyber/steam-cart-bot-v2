@@ -1009,3 +1009,17 @@ def test_funpay_input_signature_uses_stable_message_id():
     assert first == repeated
     assert first != second
 
+
+
+
+def test_extract_steam_trade_url_from_verified_funpay_anchor_href():
+    from funpay_orders import extract_steam_trade_url
+
+    fragment = (
+        '<div class="message-text"><a href="https://steamcommunity.com/tradeoffer/new/'
+        '?partner=123456&token=AbCdEf12">Открыть трейд</a></div>'
+    )
+    assert extract_steam_trade_url(fragment) == (
+        "https://steamcommunity.com/tradeoffer/new/?partner=123456&token=AbCdEf12"
+    )
+
