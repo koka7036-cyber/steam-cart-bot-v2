@@ -971,12 +971,15 @@ def asf_command(cmd):
     except Exception as e:
         return False, f"Нет связи с ASF: {e}"
 
-def get_steam_session(force_new=False):
+def get_steam_session(force_new=False, password_override=None):
     sess = load_json(SESSION_FILE, {})
     if not force_new and sess.get("steamLoginSecure") and time.time() - sess.get("timestamp", 0) < 43200:
         print("[Steam] [✓] Используем сохранённую сессию Steam.", flush=True)
         return sess["steamLoginSecure"], None
 
+    password = password_override if password_override is not None else STEAM_PASSWORD
+    if not STEAM_LOGIN or not password:
+        return None, "Не задан логин Steam или пароль. Открой в Telegram «🔐 Авторизация Steam» и выбери «Войти в Steam»."
     try:
         print("[Steam] [1/3] Запрашиваю ключ шифрования Steam...", flush=True)
         r1 = requests.get(
@@ -990,7 +993,7 @@ def get_steam_session(force_new=False):
         rsa_timestamp = r1["timestamp"]
 
         pub_key = rsa.PublicKey(mod, exp)
-        enc_password = base64.b64encode(rsa.encrypt(STEAM_PASSWORD.encode("utf-8"), pub_key)).decode("utf-8")
+        enc_password = base64.b64encode(rsa.encrypt(password.encode("utf-8"), pub_key)).decode("utf-8")
 
         print("[Steam] [2/3] Ключ получен. Отправляю запрос авторизации Steam...", flush=True)
         begin_payload = {
@@ -1033,23 +1036,31 @@ def get_steam_session(force_new=False):
         )
 
         poll_payload = {"client_id": client_id, "request_id": request_id}
-        r4 = requests.post(
-            "https://api.steampowered.com/IAuthenticationService/PollAuthSessionStatus/v1/",
-            data={"input_json": json.dumps(poll_payload)},
-            timeout=10
-        ).json().get("response", {})
+        r4 = {}
+        for _attempt in range(10):
+            poll_response = requests.post(
+                "https://api.steampowered.com/IAuthenticationService/PollAuthSessionStatus/v1/",
+                data={"input_json": json.dumps(poll_payload)},
+                timeout=10
+            )
+            poll_response.raise_for_status()
+            r4 = poll_response.json().get("response", {})
+            if r4.get("access_token"):
+                break
+            time.sleep(2)
 
         access_token = r4.get("access_token")
         if not access_token:
-            print("[Steam] [!] Steam пока не подтвердил вход. Возможна необходимость дополнительного подтверждения или повторной попытки.", flush=True)
-            return None, "Не удалось получить токен сессии Steam."
+            print("[Steam] [!] Steam не подтвердил вход за отведённое время.", flush=True)
+            return None, "Steam не подтвердил вход за 20 секунд. Проверь уведомления Steam Guard/мобильного приложения и повтори авторизацию."
 
         cookie_val = f"{steamid}%7C%7C{access_token}"
         save_json(SESSION_FILE, {"steamLoginSecure": cookie_val, "timestamp": time.time()})
         print("[Steam] [✓] Авторизация подтверждена Steam; сессия сохранена.", flush=True)
         return cookie_val, None
     except Exception as e:
-        return None, f"Ошибка автологина: {e}"
+        logging.warning("Steam authentication failed (%s)", type(e).__name__)
+        return None, f"Ошибка авторизации Steam: {type(e).__name__}. Проверь интернет, логин и пароль."
 
 def update_inventory_cache():
     steam_login_secure, _ = get_steam_session()
@@ -1626,6 +1637,7 @@ def start_playerok_monitor():
 ADMIN_MAIN_MENU = "🏠 Главное меню"
 ADMIN_BACK_MENU = "⬅️ Назад"
 admin_menu_state = {}
+pending_steam_password_admin = set()
 
 def build_admin_keyboard():
     db = load_json(DB_FILE, {"admin_id": None, "vouchers": {}})
@@ -1659,7 +1671,8 @@ def build_admin_keyboard():
     elif section == "settings":
         auto_label = "⚙️ Автозапуск Windows: ВКЛ 🟢" if is_autostart_enabled() else "⚙️ Автозапуск Windows: ВЫКЛ 🔴"
         markup.add(auto_label)
-        markup.add("🔄 Проверить состояние бота", ADMIN_BACK_MENU)
+        markup.add("🔐 Авторизация Steam", "🔄 Проверить состояние бота")
+        markup.add(ADMIN_BACK_MENU)
     else:
         markup.add("📦 Склад", "🟢 FunPay")
         markup.add("🔵 Playerok", "📈 Продажи и аналитика")
@@ -2304,6 +2317,52 @@ def gen_codes_formatted(message):
 def handle_all_messages(message):
     text = (message.text or "").strip()
     db = load_json(DB_FILE, {"admin_id": None, "vouchers": {}})
+
+    # Admin-only Steam login flow. Passwords are never intentionally persisted or logged.
+    if message.chat.id == db.get("admin_id"):
+        if message.chat.id in pending_steam_password_admin:
+            if text == "/cancel":
+                pending_steam_password_admin.discard(message.chat.id)
+                bot.send_message(message.chat.id, "Авторизация отменена.", reply_markup=build_admin_keyboard())
+                return
+            pending_steam_password_admin.discard(message.chat.id)
+            try:
+                bot.delete_message(message.chat.id, message.message_id)
+            except Exception:
+                logging.info("Could not delete Steam password message from Telegram chat.")
+            status_msg = bot.send_message(message.chat.id, "⏳ Проверяю пароль и подтверждение Steam Guard. Сообщение с паролем удалено, если Telegram разрешил удаление.")
+            password_once = text
+            try:
+                session_value, auth_error = get_steam_session(force_new=True, password_override=password_once)
+            finally:
+                password_once = ""
+            try:
+                bot.delete_message(message.chat.id, status_msg.message_id)
+            except Exception:
+                pass
+            if session_value:
+                bot.send_message(message.chat.id, "✅ Steam авторизован. Сессия сохранена локально; при обычном перезапуске пароль повторно вводить не потребуется.", reply_markup=build_admin_keyboard())
+            else:
+                bot.send_message(message.chat.id, "❌ " + (auth_error or "Авторизация не завершена.") + "\nПодтверди запрос в Steam Guard, если он появился, затем попробуй снова.", reply_markup=build_admin_keyboard())
+            return
+        if text == "🔐 Авторизация Steam":
+            sess = load_json(SESSION_FILE, {})
+            valid = bool(sess.get("steamLoginSecure") and time.time() - sess.get("timestamp", 0) < 43200)
+            markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+            markup.add("🔑 Войти в Steam", "📡 Статус Steam")
+            markup.add("⬅️ Назад")
+            bot.send_message(message.chat.id, "🔐 <b>Авторизация Steam</b>\nСессия: " + ("действует по локальному таймеру" if valid else "нет действующей локальной сессии") + "\nПароль запрашивается только по команде входа. Не отправляй пароль в группы; бот попробует удалить сообщение сразу после получения. Удаление не гарантировано.", reply_markup=markup, parse_mode="HTML")
+            return
+        if text == "📡 Статус Steam":
+            sess = load_json(SESSION_FILE, {})
+            valid = bool(sess.get("steamLoginSecure") and time.time() - sess.get("timestamp", 0) < 43200)
+            asf_ok, _ = asf_command("status")
+            bot.send_message(message.chat.id, "Steam-сессия: " + ("по таймеру активна" if valid else "отсутствует или устарела") + "\nЛогин задан: " + ("да" if STEAM_LOGIN else "нет") + "\nASF: " + ("доступен" if asf_ok else "не отвечает/не запущен"), reply_markup=build_admin_keyboard())
+            return
+        if text == "🔑 Войти в Steam":
+            pending_steam_password_admin.add(message.chat.id)
+            bot.send_message(message.chat.id, "Отправь пароль Steam следующим сообщением в личный чат. Бот не запишет его в файл или лог и попробует удалить сообщение сразу. Если передумал — отправь /cancel. Учти: сообщение проходит через Telegram, поэтому локальная консоль безопаснее.")
+            return
 
     # Admin navigation is handled here so all existing actions can reuse
     # build_admin_keyboard() and return to the currently open submenu.
