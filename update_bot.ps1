@@ -3,7 +3,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $Repo = 'koka7036-cyber/steam-cart-bot-v2'
-$Branch = 'sync/local-archive-review-2026-10-29'
+$Branch = 'main'
 $Root = [IO.Path]::GetFullPath($PSScriptRoot)
 $Log = Join-Path $Root 'update_bot.log'
 $Marker = Join-Path $Root '.bot_update_commit.txt'
