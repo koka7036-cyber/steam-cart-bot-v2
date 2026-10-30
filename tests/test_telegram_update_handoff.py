@@ -137,3 +137,31 @@ def test_refunded_orders_are_not_recreated_from_later_payment_history():
     payment = source[start:end]
     assert 'if order_number and str(order_number).upper() in refunds:' in payment
     assert 'return None, False' in payment
+
+
+def test_funpay_watcher_uses_structured_history_and_numeric_author_filtering():
+    source = read_project_file("bot.py")
+    start = source.index("def funpay_check_unread_chats")
+    end = source.index("def handle_funpay_order_selection", start)
+    watcher = source[start:end]
+
+    assert 'https://funpay.com/chat/history' in watcher
+    assert "parse_funpay_history_payload(" in watcher
+    assert 'timeline["system_events"]' in watcher
+    assert 'timeline["latest_buyer_message"]' in watcher
+    assert "message_id=latest_buyer_message.get('id')" in watcher
+    assert "extract_paid_order_events(" not in watcher
+    assert "extract_last_customer_message_fragment(" not in watcher
+
+
+def test_funpay_payment_events_are_only_accepted_from_structured_system_author():
+    source = read_project_file("funpay_orders.py")
+    parser_start = source.index("def parse_funpay_history_payload")
+    parser_end = source.index("def extract_last_customer_message_fragment", parser_start)
+    parser = source[parser_start:parser_end]
+
+    assert "author_id == 0" in parser
+    assert "author_id == buyer_id" in parser
+    assert 'latest = messages[-1]' in parser
+    assert 'latest_buyer = latest if latest and latest["is_buyer"] else None' in parser
+
