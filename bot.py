@@ -839,12 +839,12 @@ def funpay_check_unread_chats():
                     full_text = html.unescape(re.sub(r"<[^>]+>", "", last_message_html).strip())
                     detail_loaded = True
                     if not full_text.strip() and re.search(
-                        r"chat-msg-(?:file|attachment)|data-type=['\\"]attachment['\\"]",
+                        r"chat-msg-(?:file|attachment)|data-type=['\"]attachment['\"]",
                         last_message_html, re.IGNORECASE
                     ):
                         full_text = "Вложение в чате FunPay"
                 else:
-                    full_msgs = re.findall(r'<div class="chat-msg-text">([\\s\\S]*?)</div>', detail_html)
+                    full_msgs = re.findall(r'<div class="chat-msg-text">([\s\S]*?)</div>', detail_html)
                     if len(full_msgs) == 1:
                         last_message_html = full_msgs[0]
                         full_text = html.unescape(re.sub(r"<[^>]+>", "", last_message_html).strip())
@@ -901,9 +901,9 @@ def funpay_check_unread_chats():
             contains_trade_url = "steamcommunity.com/tradeoffer/new" in lower_txt
             attachment_href = extract_text_attachment_href(last_message_html, chat_page_url)
             has_file = bool(attachment_href or re.search(
-                r"(?:chat-msg-(?:file|attachment)|data-type=['\\"]attachment['\\"])",
+                r"(?:chat-msg-(?:file|attachment)|data-type=['\"]attachment['\"])",
                 last_message_html, re.IGNORECASE
-            ) or re.search(r"\\b(?:файл|вложение|attachment)\\b", msg_preview, re.IGNORECASE))
+            ) or re.search(r"\b(?:файл|вложение|attachment)\b", msg_preview, re.IGNORECASE))
             is_buyer_input = bool(trade_url or contains_trade_url or attachment_href or has_file)
 
             # Buyer-provided links/files take precedence over payment wording.
@@ -984,7 +984,7 @@ def funpay_check_unread_chats():
                 markup = types.InlineKeyboardMarkup()
                 markup.add(types.InlineKeyboardButton("✍️ Ответить покупателю", callback_data=f"fpreply_{node_id}"))
                 safe_text = re.sub(
-                    r"https?://steamcommunity\\.com/tradeoffer/new/\\?[^\\s<]+",
+                    r"https?://steamcommunity\.com/tradeoffer/new/\?[^\s<]+",
                     "[трейд-ссылка скрыта]", full_text, flags=re.IGNORECASE
                 )
                 bot.send_message(
