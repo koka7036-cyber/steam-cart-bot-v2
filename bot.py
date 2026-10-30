@@ -340,28 +340,73 @@ def funpay_ping_and_raise(force_raise=False):
         fp_state["last_ping"] = time.strftime("%H:%M:%S")
         fp_state["error"] = None
 
-        last_raise_ts = cfg.get("last_raise_ts", 0)
-        if force_raise or (time.time() - last_raise_ts >= 14400):
+        # Throttle attempts separately from confirmed successful raises. A failed or
+        # empty attempt must never be reported as a successful raise.
+        last_raise_ts = float(cfg.get("last_raise_ts", 0) or 0)
+        last_raise_attempt_ts = float(cfg.get("last_raise_attempt_ts", last_raise_ts) or 0)
+        if force_raise or (time.time() - last_raise_attempt_ts >= 14400):
             prof = s.get(f"https://funpay.com/users/{user_id}/", timeout=15)
-            nodes = list(set(re.findall(r'https://funpay\.com/lots/(\d+)/trade', prof.text)))
-            if nodes:
-                raised_cnt = 0
-                for node_id in nodes:
-                    trade_page = s.get(f"https://funpay.com/lots/{node_id}/trade", timeout=15)
-                    g_match = re.search(r'data-game="(\d+)"\s+data-node="' + str(node_id) + r'"', trade_page.text)
-                    if g_match:
-                        game_id = g_match.group(1)
-                        ajax_headers = {"X-Requested-With": "XMLHttpRequest", "Referer": f"https://funpay.com/lots/{node_id}/trade"}
-                        resp = s.post("https://funpay.com/lots/raise", data={"game_id": game_id, "node_id": node_id}, headers=ajax_headers, timeout=15).json()
-                        if "modal" in resp:
-                            sub_nodes = re.findall(r'name="node_ids\[\]"\s+value="(\d+)"', resp["modal"])
-                            if sub_nodes:
-                                resp = s.post("https://funpay.com/lots/raise", data={"game_id": game_id, "node_id": node_id, "node_ids[]": sub_nodes}, headers=ajax_headers, timeout=15).json()
-                        if resp.get("error") == 0:
-                            raised_cnt += 1
-                cfg["last_raise_ts"] = time.time()
+            prof.raise_for_status()
+            nodes = sorted(set(re.findall(r'https://funpay\\.com/lots/(\\d+)/trade', prof.text)))
+            attempt_time = time.time()
+            cfg["last_raise_attempt_ts"] = attempt_time
+
+            if not nodes:
+                fp_state["last_raise"] = "Лоты не найдены на странице профиля; поднятие не подтверждено"
                 save_json(FP_CONFIG_FILE, cfg)
-                fp_state["last_raise"] = f"Поднято разделов: {raised_cnt}/{len(nodes)} в {time.strftime('%H:%M')}"
+            else:
+                raised_cnt = 0
+                failed_cnt = 0
+                for node_id in nodes:
+                    try:
+                        trade_page = s.get(f"https://funpay.com/lots/{node_id}/trade", timeout=15)
+                        trade_page.raise_for_status()
+                        g_match = re.search(r'data-game="(\\d+)"\\s+data-node="' + re.escape(str(node_id)) + r'"', trade_page.text)
+                        if not g_match:
+                            failed_cnt += 1
+                            continue
+
+                        game_id = g_match.group(1)
+                        ajax_headers = {
+                            "X-Requested-With": "XMLHttpRequest",
+                            "Referer": f"https://funpay.com/lots/{node_id}/trade",
+                        }
+                        resp = s.post(
+                            "https://funpay.com/lots/raise",
+                            data={"game_id": game_id, "node_id": node_id},
+                            headers=ajax_headers,
+                            timeout=15,
+                        )
+                        resp.raise_for_status()
+                        result = resp.json()
+                        if "modal" in result:
+                            sub_nodes = re.findall(r'name="node_ids\\[\\]"\\s+value="(\\d+)"', result["modal"])
+                            if sub_nodes:
+                                resp = s.post(
+                                    "https://funpay.com/lots/raise",
+                                    data=[("game_id", game_id), ("node_id", node_id)]
+                                         + [("node_ids[]", sub_node) for sub_node in sub_nodes],
+                                    headers=ajax_headers,
+                                    timeout=15,
+                                )
+                                resp.raise_for_status()
+                                result = resp.json()
+                        if result.get("error") == 0:
+                            raised_cnt += 1
+                        else:
+                            failed_cnt += 1
+                    except (requests.RequestException, ValueError, KeyError, TypeError):
+                        failed_cnt += 1
+                        logging.warning("FunPay lot raise failed for node %s", node_id)
+
+                # Persist attempt throttling even on failure, to avoid hammering FunPay.
+                # Only advance last_raise_ts when every discovered section succeeded.
+                if raised_cnt == len(nodes) and failed_cnt == 0:
+                    cfg["last_raise_ts"] = attempt_time
+                    fp_state["last_raise"] = f"Поднятие подтверждено: {raised_cnt}/{len(nodes)} разделов в {time.strftime('%H:%M')}"
+                else:
+                    fp_state["last_raise"] = f"Поднятие не полностью подтверждено: {raised_cnt}/{len(nodes)} разделов; ошибок/пропусков: {failed_cnt}"
+                save_json(FP_CONFIG_FILE, cfg)
 
         return True, f"Онлайн активен (ID: {user_id})"
     except Exception as e:
