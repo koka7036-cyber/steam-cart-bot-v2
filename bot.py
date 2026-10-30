@@ -307,24 +307,45 @@ bot_update_lock = threading.Lock()
 update_restart_requested = False
 
 
+def _release_bot_update_lock():
+    try:
+        bot_update_lock.release()
+    except RuntimeError:
+        logging.warning("Bot update lock was already released.")
+
+
 def _run_update_check(chat_id, status_message_id):
+    lock_released = False
+
+    def release_once():
+        nonlocal lock_released
+        if not lock_released:
+            lock_released = True
+            _release_bot_update_lock()
+
     try:
         env = os.environ.copy()
         env["CARD_BOT_NONINTERACTIVE"] = "1"
-        result = subprocess.run(
-            [
-                "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive",
-                "-ExecutionPolicy", "Bypass", "-File", UPDATE_SCRIPT_PATH, "-CheckOnly",
-            ],
-            cwd=BASE_DIR,
-            env=env,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=60,
-            check=False,
-        )
+        try:
+            result = subprocess.run(
+                [
+                    "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive",
+                    "-ExecutionPolicy", "Bypass", "-File", UPDATE_SCRIPT_PATH, "-CheckOnly",
+                ],
+                cwd=BASE_DIR,
+                env=env,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=60,
+                check=False,
+            )
+        finally:
+            # Do not hold the process-wide check lock while waiting for Telegram
+            # to edit a message; a slow Telegram API response must not block retries.
+            release_once()
+
         output = (result.stdout or "") + "\n" + (result.stderr or "")
         match = re.search(r"(CURRENT|UPDATE_AVAILABLE):([0-9a-f]{40})", output)
         if result.returncode != 0:
@@ -384,12 +405,17 @@ def _run_update_check(chat_id, status_message_id):
             reply_markup=markup,
         )
     except subprocess.TimeoutExpired:
-        bot.edit_message_text(
-            "⌛ Проверка GitHub превысила лимит времени. Бот не изменён.",
-            chat_id,
-            status_message_id,
-        )
+        release_once()
+        try:
+            bot.edit_message_text(
+                "⌛ Проверка GitHub превысила лимит времени. Бот не изменён.",
+                chat_id,
+                status_message_id,
+            )
+        except Exception:
+            logging.exception("Could not report update check timeout in Telegram.")
     except Exception:
+        release_once()
         logging.exception("Telegram update check failed")
         try:
             bot.edit_message_text(
@@ -400,8 +426,7 @@ def _run_update_check(chat_id, status_message_id):
         except Exception:
             pass
     finally:
-        if bot_update_lock.locked():
-            bot_update_lock.release()
+        release_once()
 
 
 def begin_bot_update_check(chat_id):
@@ -415,12 +440,25 @@ def begin_bot_update_check(chat_id):
     if not bot_update_lock.acquire(blocking=False):
         bot.send_message(chat_id, "⏳ Проверка или обновление уже выполняется.")
         return
-    status = bot.send_message(chat_id, "🔎 Проверяю GitHub и доступность обновления. Бот продолжает работать.")
-    threading.Thread(
-        target=_run_update_check,
-        args=(chat_id, status.message_id),
-        daemon=True,
-    ).start()
+
+    try:
+        status = bot.send_message(
+            chat_id,
+            "🔎 Проверяю GitHub и доступность обновления. Бот продолжает работать."
+        )
+        worker = threading.Thread(
+            target=_run_update_check,
+            args=(chat_id, status.message_id),
+            daemon=True,
+        )
+        worker.start()
+    except Exception:
+        _release_bot_update_lock()
+        logging.exception("Could not start Telegram update check.")
+        try:
+            bot.send_message(chat_id, "❌ Не удалось запустить проверку обновлений. Повтори попытку.")
+        except Exception:
+            pass
 
 
 @bot.callback_query_handler(func=lambda call: bool(call.data) and call.data.startswith("bot_update_"))
@@ -696,7 +734,7 @@ def send_funpay_chat_message(node_id, text):
         return False, f"Ошибка отправки: {e}"
 
 from order_parser import detect_order_sets_and_quantity, is_paid_order_notification
-from funpay_orders import (decode_text_attachment, extract_last_chat_message_fragment, extract_steam_trade_url, extract_text_attachment_href, filter_reserved_assets, find_open_order_for_chat, funpay_cold_start_blockers, inventory_cache_freshness_error, is_funpay_system_message, mark_input_received, register_payment, message_signature, restore_reserved_assets, voucher_redemption_block_reason, voucher_reset_block_reason)
+from funpay_orders import (compact_funpay_text, decode_text_attachment, extract_chat_message_fragments, extract_funpay_system_alert_fragments, extract_last_customer_message_fragment, extract_steam_trade_url, extract_text_attachment_href, filter_reserved_assets, find_open_order_for_chat, funpay_cold_start_blockers, inventory_cache_freshness_error, is_funpay_system_message, mark_input_received, register_payment, message_signature, restore_reserved_assets, voucher_redemption_block_reason, voucher_reset_block_reason)
 from sales_analytics import summarize_sales
 from playerok_orders import (
     active_orders_for_chat,
@@ -837,9 +875,9 @@ def register_funpay_payment(node_id, buyer, text, sets_per_item, quantity):
             data["orders"], node_id=str(node_id), buyer=buyer, text=text,
             sets_per_item=sets_per_item, quantity=quantity,
         )
-        if created:
-            # Register the paid order first; then persist exact asset IDs before cache mutation.
-            save_json(FP_ORDERS_FILE, data)
+        # Persist even when the order already existed: a verified repeat alert may
+        # safely move an unfulfilled order to the current FunPay chat node.
+        save_json(FP_ORDERS_FILE, data)
         # A crash may occur after the initial ledger write but before reservation.
         # Repeated payment notifications can safely resume only this untouched state.
         # Orders already put in review after a stock/cache error are not retried automatically.
@@ -869,7 +907,26 @@ def record_funpay_buyer_input(node_id, trade_url, input_kind):
                 and str(item.get("node_id")) == str(node_id)
                 and item.get("status") in {"sending", "delivery_uncertain", "awaiting_input", "input_received", "reserved", "review", "retry_required"}
             ]
+            if not candidates:
+                logging.warning(
+                    "FunPay trade URL has no matching paid order: node=%s; total_orders=%s; open_statuses=%s",
+                    node_id,
+                    len(data["orders"]),
+                    sorted({
+                        str(item.get("status"))
+                        for item in data["orders"].values()
+                        if isinstance(item, dict)
+                    }),
+                )
             if len(candidates) > 1:
+                logging.warning(
+                    "FunPay trade URL is ambiguous: node=%s; candidate_orders=%s",
+                    node_id,
+                    [
+                        (str(item.get("funpay_order_number") or item.get("key")), str(item.get("status")))
+                        for item in candidates
+                    ],
+                )
                 return None, "ambiguous", "В этом чате несколько активных заказов."
             if len(candidates) == 1 and candidates[0].get("status") == "sending":
                 return candidates[0], "in_progress", "Заказ уже обрабатывается; повторная отправка не выполняется."
@@ -1056,50 +1113,38 @@ def funpay_check_unread_chats():
                 changed = True
                 continue
 
-            # Do not acknowledge an unread message until its detail page was
-            # retrieved and the message was handled. Failed reads will retry.
-            full_text = msg_preview
+            # Read the full chat history once. The latest visible entry may be a
+            # seller refund/payment alert rather than a buyer message.
+            full_text = ""
             last_message_html = ""
             detail_loaded = False
             try:
                 r_node = s.get(f"https://funpay.com/chat/?node={node_id}", timeout=10)
                 r_node.raise_for_status()
                 detail_html = r_node.text
-                # Restrict extraction to the most recent message wrapper. Looking at
-                # the last .chat-msg-text alone can accidentally reuse an old link
-                # when the buyer's latest message is an attachment.
-                last_message_html = extract_last_chat_message_fragment(r_node.text) or ""
+                detail_loaded = True
+
+                # Select the newest ordinary chat message. System alerts are processed
+                # separately below and must never be mistaken for a buyer file/link.
+                last_message_html = extract_last_customer_message_fragment(detail_html) or ""
                 if last_message_html:
-                    full_text = html.unescape(re.sub(r"<[^>]+>", "", last_message_html).strip())
-                    detail_loaded = True
-                    if not full_text.strip() and re.search(
-                        r"chat-msg-(?:file|attachment)|data-type=['\"]attachment['\"]",
-                        last_message_html, re.IGNORECASE
-                    ):
-                        full_text = "Вложение в чате FunPay"
+                    full_text = compact_funpay_text(last_message_html)
                 else:
-                    # A single text node is safe as a compatibility fallback. Multiple
-                    # old text nodes without a recognized wrapper are ambiguous: retry
-                    # rather than risking delivery to a link from an earlier message.
-                    full_msgs = re.findall(r'<div class="chat-msg-text">([\s\S]*?)</div>', r_node.text)
-                    if len(full_msgs) == 1:
+                    # Compatibility fallback for older FunPay markup without wrappers.
+                    full_msgs = re.findall(r'<div class="chat-msg-text">([\s\S]*?)</div>', detail_html)
+                    if len(full_msgs) == 1 and not is_funpay_system_message(full_msgs[0]):
                         last_message_html = full_msgs[0]
-                        full_text = html.unescape(re.sub(r"<[^>]+>", "", last_message_html).strip())
-                        detail_loaded = bool(full_text.strip())
+                        full_text = compact_funpay_text(last_message_html)
             except Exception as exc:
                 logging.warning("Не удалось прочитать детали чата FunPay #node%s: %s", node_id, type(exc).__name__)
                 continue
 
-            if not detail_loaded or not full_text.strip():
-                logging.warning("Детали последнего сообщения FunPay #node%s пока недоступны; повторим проверку.", node_id)
+            if not detail_loaded:
+                logging.warning("Детали чата FunPay #node%s пока недоступны; повторим проверку.", node_id)
                 continue
 
-
-            # Replay system-authored payment confirmations from the visible chat history.
-            # A buyer's later trade URL can become the newest message and must not hide
-            # the earlier payment event. Keep all existing first-run and message handling
-            # behavior unchanged. Only trusted system alerts with explicit paid wording
-            # and a recognized set description may create a paid order.
+            # Replay trusted system-authored payment confirmations independently
+            # of the last buyer message, so a later refund notice cannot hide them.
             try:
                 payment_events = extract_paid_order_events(detail_html)
             except Exception:
@@ -1131,6 +1176,14 @@ def funpay_check_unread_chats():
                         f"Резерв: {record.get('status')}.\\n"
                         "Ожидается Steam trade-ссылка обычным текстовым сообщением в чате FunPay."
                     )
+
+            if not last_message_html or not full_text.strip():
+                # A system-only event (including a refund) is acknowledged after
+                # payment alerts have been replayed; it is not a customer input/file.
+                seen_msgs[node_id] = sig
+                changed = True
+                first_run = False
+                continue
 
             lower_txt = full_text.lower()
             is_order_payment = (
@@ -1250,6 +1303,7 @@ def funpay_check_unread_chats():
                         r"https?://steamcommunity\.com/tradeoffer/new/\?[^\s<]+",
                         "[трейд-ссылка скрыта]", full_text, flags=re.IGNORECASE
                     )
+                    safe_text = compact_funpay_text(safe_text, max_chars=900)
                     bot.send_message(
                         admin_id,
                         f"💬 Новое сообщение на FunPay\n"
@@ -2719,6 +2773,7 @@ def handle_all_messages(message):
     if message.chat.id == db.get("admin_id"):
         section_buttons = {
             "📦 Склад и коды": "stock",
+            "📦 Склад": "stock",
             "🟢 FunPay": "funpay",
             "🔵 Playerok": "playerok",
             "📈 Продажи и аналитика": "sales",
