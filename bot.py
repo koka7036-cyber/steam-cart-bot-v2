@@ -1811,6 +1811,8 @@ def update_inventory_cache():
     def fetch_inventory_page(start_assetid):
         params = {"l": "russian", "count": 750}
         if start_assetid is not None:
+            # A short pause reduces pressure on Steam when the inventory spans pages.
+            time.sleep(1)
             params["start_assetid"] = start_assetid
         response = requests.get(
             url,
