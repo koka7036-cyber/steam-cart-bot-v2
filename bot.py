@@ -2091,12 +2091,12 @@ def set_fp_key(message):
     config = load_json(FP_CONFIG_FILE, {})
     config["golden_key"] = key
     config["last_raise_ts"] = 0
-    # The owner selected the in-chat link + text-file workflow for this custom bot.
-    # Buyers are never directed to Telegram or an external file-hosting service.
-    config["delivery_input_mode"] = "both"
+    # FunPay trade URLs are accepted only as ordinary text in the order chat.
+    # File attachments and external file hosting are not part of this workflow.
+    config["delivery_input_mode"] = "chat_only"
     config["allow_chat_trade_url"] = True
     config.setdefault("auto_delivery_funpay", False)
-    config["funpay_workflow_version"] = 2
+    # Do not downgrade workflow_version here: startup migration owns the safety gate.
     save_json(FP_CONFIG_FILE, config)
     bot.send_message(message.chat.id, "⏳ Проверяю ключ `golden_key` на FunPay...", parse_mode="Markdown")
     ok, msg = funpay_ping_and_raise(force_raise=True)
@@ -2104,7 +2104,7 @@ def set_fp_key(message):
         bot.send_message(
             message.chat.id,
             f"✅ **FunPay подключен.** (ID: `{fp_state['user_id']}`)\n"
-            "Автоматизация обрабатывает ссылку из чата или текстовое вложение; внешние ссылки покупателям не отправляются.",
+            "Автоматизация принимает Steam Trade URL обычным текстом в чате заказа; файлы и внешние ссылки не используются.",
             reply_markup=build_admin_keyboard(),
             parse_mode="Markdown"
         )
