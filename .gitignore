@@ -235,3 +235,7 @@ autostart_task.log
 auto_update.log
 auto_update_commit.txt
 requirements.installed.txt
+.github_token.dpapi
+.bot_update_commit.txt
+update_bot.log
+launcher_start.log
