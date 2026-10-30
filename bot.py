@@ -17,6 +17,11 @@ import rsa
 import telebot
 from telebot import types, apihelper
 from runtime_paths import resolve_runtime_paths
+from steam_inventory import (
+    SteamInventoryPaginationError,
+    SteamInventoryRateLimitError,
+    collect_inventory_pages,
+)
 
 # --- КОНФИГУРАЦИЯ ---
 TG_TOKEN = os.getenv("TG_TOKEN", "")
@@ -1801,21 +1806,35 @@ def update_inventory_cache():
         "Accept": "application/json",
         "Referer": f"https://steamcommunity.com/profiles/{STEAM_ID}/inventory/"
     }
-    url = f"https://steamcommunity.com/inventory/{STEAM_ID}/753/6?l=russian&count=750"
+    url = f"https://steamcommunity.com/inventory/{STEAM_ID}/753/6"
+
+    def fetch_inventory_page(start_assetid):
+        params = {"l": "russian", "count": 750}
+        if start_assetid is not None:
+            # A short pause reduces pressure on Steam when the inventory spans pages.
+            time.sleep(1)
+            params["start_assetid"] = start_assetid
+        response = requests.get(
+            url,
+            params=params,
+            headers=headers,
+            cookies=cookies,
+            timeout=20,
+        )
+        if response.status_code == 429:
+            raise SteamInventoryRateLimitError("HTTP 429")
+        response.raise_for_status()
+        return response.json()
 
     try:
-        r = requests.get(url, headers=headers, cookies=cookies, timeout=20)
-        if r.status_code == 429:
-            return None, "Steam вернул ошибку 429. Подожди 2 минуты."
-        data = r.json()
+        assets, descriptions = collect_inventory_pages(fetch_inventory_page)
+    except SteamInventoryRateLimitError:
+        return None, "Steam вернул ошибку 429. Подожди 2 минуты."
+    except SteamInventoryPaginationError as e:
+        return None, str(e)
     except Exception as e:
+        # Never replace the existing cache with a partial inventory snapshot.
         return None, f"Ошибка чтения инвентаря: {e}"
-
-    if not data or not data.get("success"):
-        return None, "Не удалось прочитать инвентарь."
-
-    assets = data.get("assets", [])
-    descriptions = {f"{d['classid']}_{d['instanceid']}": d for d in data.get("descriptions", [])}
 
     games = {}
     total_cards = 0
