@@ -60,3 +60,18 @@ def test_new_github_token_is_saved_only_after_api_and_sha_validation():
     )
     assert api_index < sha_index < save_index
     assert "SteamCardsBot-GitHubReadOnly" in updater
+
+
+def test_autostart_embedded_helper_matches_utf8_bom_script_and_refreshes_stale_copy():
+    bot_source = read_project_file("bot.py")
+    helper_file = read_project_file("toggle_autostart_task.ps1")
+    marker = '_AUTOSTART_HELPER_FALLBACK = r"""'
+    start = bot_source.index(marker) + len(marker)
+    end = bot_source.index('"""', start)
+    embedded = bot_source[start:end].replace("\r\n", "\n").replace("\r", "\n").rstrip("\n")
+    deployed = helper_file.replace("\r\n", "\n").replace("\r", "\n").rstrip("\n")
+
+    assert embedded == deployed
+    assert 'encoding="utf-8-sig"' in bot_source
+    assert "os.replace(temp_path, helper_path)" in bot_source
+    assert "New-Object System.Text.UTF8Encoding($false)" in deployed

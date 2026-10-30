@@ -1,4 +1,4 @@
-# One-time setup for Steam Card Bot on Windows 11.
+﻿# One-time setup for Steam Card Bot on Windows 11.
 # Run from the extracted bot folder. This script does not start the bot or send trades.
 $ErrorActionPreference = 'Stop'
 Set-Location -LiteralPath $PSScriptRoot

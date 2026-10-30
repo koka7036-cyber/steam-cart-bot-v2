@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 
 # Installs a per-user logon task. It does not start the bot immediately.
 $botRoot = 'C:\CardBot'
