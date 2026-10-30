@@ -38,7 +38,11 @@ try {
             try { $githubToken = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr) }
             finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr) }
         } catch {
-            throw 'Saved GitHub credential cannot be decrypted for this Windows user. Remove .github_token.dpapi and restart to configure it again.'
+            # DPAPI credentials are bound to the Windows user/profile that created them.
+            # Do not abort and do not delete the unreadable file automatically: fall through
+            # to the hidden prompt below so the user can re-enter a read-only token safely.
+            $githubToken = ''
+            Log 'Saved GitHub credential could not be decrypted for this Windows user; requesting token again. The existing credential file is preserved until a replacement is entered.'
         }
     }
     if ([string]::IsNullOrWhiteSpace($githubToken)) {
