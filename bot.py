@@ -23,7 +23,7 @@ STEAM_LOGIN = os.getenv("STEAM_LOGIN", "")
 STEAM_PASSWORD = os.getenv("STEAM_PASSWORD", "")
 ASF_IPC_URL = "http://127.0.0.1:1242/Api/Command"
 
-BAT_PATH = r"C:\CardBot\start.bat"
+BAT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "start.bat")
 REG_RUN_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
 REG_APP_NAME = "CardBotFarmAutostart"
 
@@ -1037,7 +1037,7 @@ def get_steam_session(force_new=False, password_override=None):
 
         poll_payload = {"client_id": client_id, "request_id": request_id}
         r4 = {}
-        for _attempt in range(10):
+        for _attempt in range(30):
             poll_response = requests.post(
                 "https://api.steampowered.com/IAuthenticationService/PollAuthSessionStatus/v1/",
                 data={"input_json": json.dumps(poll_payload)},
@@ -1052,7 +1052,7 @@ def get_steam_session(force_new=False, password_override=None):
         access_token = r4.get("access_token")
         if not access_token:
             print("[Steam] [!] Steam не подтвердил вход за отведённое время.", flush=True)
-            return None, "Steam не подтвердил вход за 20 секунд. Проверь уведомления Steam Guard/мобильного приложения и повтори авторизацию."
+            return None, "Steam не подтвердил вход за 60 секунд. Проверь уведомления Steam Guard/мобильного приложения и повтори авторизацию."
 
         cookie_val = f"{steamid}%7C%7C{access_token}"
         save_json(SESSION_FILE, {"steamLoginSecure": cookie_val, "timestamp": time.time()})
@@ -2319,7 +2319,7 @@ def handle_all_messages(message):
     db = load_json(DB_FILE, {"admin_id": None, "vouchers": {}})
 
     # Admin-only Steam login flow. Passwords are never intentionally persisted or logged.
-    if message.chat.id == db.get("admin_id"):
+    if message.chat.id == db.get("admin_id") and message.from_user and message.from_user.id == db.get("admin_id") and message.chat.type == "private":
         if message.chat.id in pending_steam_password_admin:
             if text == "/cancel":
                 pending_steam_password_admin.discard(message.chat.id)
