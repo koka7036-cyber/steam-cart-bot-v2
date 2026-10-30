@@ -2414,9 +2414,15 @@ def handle_all_messages(message):
                 cache_status = f"обновлён {int(cache_age // 60)} мин. назад"
             except OSError:
                 cache_status = "файл отсутствует"
+            if steam_session_valid:
+                steam_status = "свежая по локальному таймеру; серверная проверка не выполнялась"
+            elif steam_session.get("steamLoginSecure"):
+                steam_status = "устарела по локальному таймеру; нужна повторная авторизация"
+            else:
+                steam_status = "не найдена; нужна авторизация"
             diagnostics = (
                 "🔎 <b>Диагностика</b>\n"
-                f"Steam: {'сессия действительна' if steam_session_valid else 'нужна авторизация'}; "
+                f"Steam: {steam_status}; "
                 f"логин {'задан' if STEAM_LOGIN else 'не задан'}, ID {'задан' if STEAM_ID else 'не задан'}\n"
                 f"Кэш склада: {cache_status}\n"
                 f"FunPay: {'онлайн' if fp_state.get('online') else 'не подтверждён'}; "
