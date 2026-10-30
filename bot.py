@@ -906,12 +906,18 @@ def register_funpay_refund(node_id, text):
     order_number = str(order_number).upper()
     with funpay_orders_lock:
         data = load_funpay_orders()
-        refunds = data.setdefault("refunds", {})
+        refunds = data.get("refunds")
+        if not isinstance(refunds, dict):
+            refunds = {}
+            data["refunds"] = refunds
         refund_key = f"fp-order-{order_number}"
         record = data["orders"].get(refund_key)
 
+        if order_number in refunds:
+            return "duplicate", record if isinstance(record, dict) else None
+
         if record and (record.get("funpay_refunded") or record.get("status") == "refunded"):
-            refunds[order_number] = refunds.get(order_number) or {
+            refunds[order_number] = {
                 "node_id": str(node_id),
                 "refunded_at": int(time.time()),
             }
