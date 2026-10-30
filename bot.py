@@ -15,6 +15,7 @@ import requests
 import rsa
 import telebot
 from telebot import types
+from runtime_paths import resolve_runtime_paths
 
 # --- КОНФИГУРАЦИЯ ---
 TG_TOKEN = os.getenv("TG_TOKEN", "")
@@ -23,16 +24,17 @@ STEAM_LOGIN = os.getenv("STEAM_LOGIN", "")
 STEAM_PASSWORD = os.getenv("STEAM_PASSWORD", "")
 ASF_IPC_URL = "http://127.0.0.1:1242/Api/Command"
 
-BAT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "start.bat")
+BASE_DIR, DATA_DIR = resolve_runtime_paths(__file__, os.getenv("CARDBOT_DATA_DIR") or None)
+BAT_PATH = os.path.join(BASE_DIR, "start.bat")
 REG_RUN_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
 REG_APP_NAME = "CardBotFarmAutostart"
 
-DB_FILE = "vouchers.json"
-CACHE_FILE = "inventory_cache.json"
-SESSION_FILE = "steam_session.json"
-FP_CONFIG_FILE = "funpay_config.json"
-FP_ORDERS_FILE = "funpay_orders.json"
-PLAYEROK_ORDERS_FILE = "playerok_orders.json"
+DB_FILE = os.path.join(DATA_DIR, "vouchers.json")
+CACHE_FILE = os.path.join(DATA_DIR, "inventory_cache.json")
+SESSION_FILE = os.path.join(DATA_DIR, "steam_session.json")
+FP_CONFIG_FILE = os.path.join(DATA_DIR, "funpay_config.json")
+FP_ORDERS_FILE = os.path.join(DATA_DIR, "funpay_orders.json")
+PLAYEROK_ORDERS_FILE = os.path.join(DATA_DIR, "playerok_orders.json")
 
 if not TG_TOKEN:
     raise RuntimeError("Установи переменную окружения TG_TOKEN перед запуском бота.")
@@ -71,7 +73,7 @@ def save_json(filename, data):
         raise
 
 logging.basicConfig(
-    filename="bot_errors.log",
+    filename=os.path.join(DATA_DIR, "bot_errors.log"),
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     encoding="utf-8"
