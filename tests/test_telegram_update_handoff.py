@@ -165,3 +165,13 @@ def test_funpay_payment_events_are_only_accepted_from_structured_system_author()
     assert 'latest = messages[-1]' in parser
     assert 'latest_buyer = latest if latest and latest["is_buyer"] else None' in parser
 
+
+
+
+def test_funpay_watcher_extracts_plain_text_or_anchor_href_trade_url():
+    source = read_project_file("bot.py")
+    start = source.index("def funpay_check_unread_chats")
+    end = source.index("def handle_funpay_order_selection", start)
+    watcher = source[start:end]
+    assert "extract_steam_trade_url(full_text) or extract_steam_trade_url(last_message_html)" in watcher
+
