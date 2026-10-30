@@ -1991,13 +1991,33 @@ def funpay_release_cmd(message):
         if record.get("status") == "delivered":
             bot.send_message(message.chat.id, "❌ Нельзя снять резерв с уже выданного заказа.")
             return
-        restored = restore_reservation_to_cache(record.get("reservation"))
+        reservation = record.get("reservation")
+        if reservation:
+            restored = restore_reservation_to_cache(reservation)
+            if not restored:
+                # Never erase the only reservation journal when stock restoration fails.
+                bot.send_message(
+                    message.chat.id,
+                    "❌ Резерв не снят: запись неполная или склад не удалось восстановить. "
+                    "Заказ и резерв сохранены для ручной проверки."
+                )
+                return
+        else:
+            restored = False
+
         record["reservation"] = None
         record["status"] = "cancelled"
         record["updated_at"] = int(time.time())
-        record.setdefault("notes", []).append("Резерв снят администратором через /fprelease.")
+        record.setdefault("notes", []).append(
+            "Резерв снят администратором через /fprelease."
+            if restored else "Заказ отменён администратором; активного резерва не было."
+        )
         save_json(FP_ORDERS_FILE, data)
-    bot.send_message(message.chat.id, "✅ Резерв снят." if restored else "✅ Заказ помечен отмененным; активного резерва не было.")
+    bot.send_message(
+        message.chat.id,
+        "✅ Резерв снят и карточки возвращены на склад."
+        if restored else "✅ Заказ помечен отменённым; активного резерва не было."
+    )
 
 @bot.message_handler(func=lambda m: m.text == "🔗 Где взять трейд-ссылку?")
 def customer_help_tradeurl(message):
