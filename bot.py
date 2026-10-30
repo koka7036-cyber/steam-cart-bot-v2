@@ -345,15 +345,17 @@ def funpay_ping_and_raise(force_raise=False):
         last_raise_ts = float(cfg.get("last_raise_ts", 0) or 0)
         last_raise_attempt_ts = float(cfg.get("last_raise_attempt_ts", last_raise_ts) or 0)
         if force_raise or (time.time() - last_raise_attempt_ts >= 14400):
+            # Record the attempt before network calls so outages cannot trigger a
+            # raise request every 15 seconds from the background polling loop.
+            attempt_time = time.time()
+            cfg["last_raise_attempt_ts"] = attempt_time
+            save_json(FP_CONFIG_FILE, cfg)
             prof = s.get(f"https://funpay.com/users/{user_id}/", timeout=15)
             prof.raise_for_status()
             nodes = sorted(set(re.findall(r'https://funpay\.com/lots/(\d+)/trade', prof.text)))
-            attempt_time = time.time()
-            cfg["last_raise_attempt_ts"] = attempt_time
 
             if not nodes:
                 fp_state["last_raise"] = "Лоты не найдены на странице профиля; поднятие не подтверждено"
-                save_json(FP_CONFIG_FILE, cfg)
             else:
                 raised_cnt = 0
                 failed_cnt = 0
