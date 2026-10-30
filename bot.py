@@ -278,6 +278,8 @@ def toggle_autostart():
 
 # --- TELEGRAM-CONTROLLED BOT UPDATES ---
 UPDATE_SCRIPT_PATH = os.path.join(BASE_DIR, "update_bot.ps1")
+UPDATE_REQUEST_PATH = os.path.join(BASE_DIR, ".bot_update_expected_sha.txt")
+pending_bot_update_by_chat = {}
 bot_update_lock = threading.Lock()
 update_restart_requested = False
 
@@ -329,6 +331,7 @@ def _run_update_check(chat_id, status_message_id):
 
         state, remote_sha = match.groups()
         if state == "CURRENT":
+            pending_bot_update_by_chat.pop(chat_id, None)
             bot.edit_message_text(
                 "✅ Бот уже обновлён.\nВерсия main: " + remote_sha[:12],
                 chat_id,
@@ -336,6 +339,7 @@ def _run_update_check(chat_id, status_message_id):
             )
             return
 
+        pending_bot_update_by_chat[chat_id] = remote_sha
         markup = types.InlineKeyboardMarkup()
         markup.row(
             types.InlineKeyboardButton(
@@ -407,10 +411,16 @@ def bot_update_callback(call):
         bot.answer_callback_query(call.id, "Недостаточно прав.")
         return
 
+    chat_id = call.message.chat.id
     if call.data == "bot_update_cancel":
+        pending_bot_update_by_chat.pop(chat_id, None)
         bot.answer_callback_query(call.id, "Обновление отменено.")
         try:
-            bot.edit_message_text("Обновление отменено. Текущая версия не изменена.", call.message.chat.id, call.message.message_id)
+            bot.edit_message_text(
+                "Обновление отменено. Текущая версия не изменена.",
+                chat_id,
+                call.message.message_id,
+            )
         except Exception:
             pass
         return
@@ -421,49 +431,50 @@ def bot_update_callback(call):
         return
     expected_sha = match.group(1)
 
-    if not bot_update_lock.locked():
+    if update_restart_requested:
+        bot.answer_callback_query(call.id, "Обновление уже запускается.")
+        return
+    if pending_bot_update_by_chat.get(chat_id) != expected_sha:
         bot.answer_callback_query(call.id, "Проверка устарела. Сначала проверь обновления заново.")
         return
 
-    bot.answer_callback_query(call.id, "Запускаю безопасное обновление.")
-    bot.send_message(
-        call.message.chat.id,
-        "⏳ Начинаю обновление. Бот остановится, дождётся завершения текущего процесса, "
-        "проверит файлы, создаст резервную копию и запустится снова. "
-        "Автовыдача и реальные продажи автоматически не включаются.",
-    )
-
-    env = os.environ.copy()
-    env["CARD_BOT_NONINTERACTIVE"] = "1"
+    # Save the exact SHA in a small hand-off file. run_bot.ps1 owns the process
+    # lifecycle and runs the updater only after this Python process has exited.
+    temp_request = UPDATE_REQUEST_PATH + ".tmp"
     try:
-        log_path = os.path.join(DATA_DIR, "telegram_update.log")
-        log_handle = open(log_path, "a", encoding="utf-8")
+        with open(temp_request, "w", encoding="ascii", newline="\n") as request_file:
+            request_file.write(expected_sha + "\n")
+            request_file.flush()
+            os.fsync(request_file.fileno())
+        os.replace(temp_request, UPDATE_REQUEST_PATH)
+    except OSError:
+        logging.exception("Could not write Telegram update request")
         try:
-            subprocess.Popen(
-                [
-                    "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive",
-                    "-ExecutionPolicy", "Bypass", "-File", UPDATE_SCRIPT_PATH,
-                    "-ExpectedSha", expected_sha, "-WaitForBot", "-Restart",
-                ],
-                cwd=BASE_DIR,
-                env=env,
-                stdin=subprocess.DEVNULL,
-                stdout=log_handle,
-                stderr=subprocess.STDOUT,
-                creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
-                close_fds=True,
-            )
-        finally:
-            log_handle.close()
-    except Exception:
-        logging.exception("Could not start Telegram bot updater")
-        bot.send_message(call.message.chat.id, "❌ Не удалось запустить updater. Бот продолжает работу; подробности в bot_errors.log.")
-        bot_update_lock.release()
+            if os.path.exists(temp_request):
+                os.remove(temp_request)
+        except OSError:
+            pass
+        bot.answer_callback_query(call.id, "Не удалось подготовить обновление.")
+        bot.send_message(chat_id, "❌ Не удалось передать команду Windows. Текущая версия продолжает работать.")
         return
 
+    pending_bot_update_by_chat.pop(chat_id, None)
     update_restart_requested = True
     restart_requested = True
+    bot.answer_callback_query(call.id, "Подтверждено. Windows запускает обновление.")
+    try:
+        bot.edit_message_text(
+            "⏳ Обновление подтверждено.\n"
+            "Сейчас бот завершит текущий процесс. Windows проверит SHA, скачает и проверит файлы, "
+            "сделает резервную копию, установит обновление и запустит новую версию.\n"
+            "Автовыдача и реальные продажи не включаются.",
+            chat_id,
+            call.message.message_id,
+        )
+    except Exception:
+        pass
     threading.Thread(target=lambda: (time.sleep(1), bot.stop_polling()), daemon=True).start()
+
 
 # --- МОДУЛЬ 2: FUNPAY 24/7 + АВТОБОТ ПРОДАЖ ---
 fp_state = {
