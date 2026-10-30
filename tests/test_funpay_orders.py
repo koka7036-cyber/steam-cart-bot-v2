@@ -845,3 +845,167 @@ def test_extract_order_number_supports_other_russian_cases():
 
     assert extract_order_number("возврат заказа #ABCD1234") == "ABCD1234"
     assert extract_order_number("сообщение по заказом #ABCD1234") == "ABCD1234"
+
+
+def _history_message(message_id, author_id, html):
+    return {"id": message_id, "author": author_id, "html": html}
+
+
+def _history_payload(messages, buyer_id=123456789):
+    return {
+        "chat": {
+            "node": {
+                "id": 297865070,
+                "name": f"chat-76543210-{buyer_id}",
+            },
+            "messages": messages,
+        }
+    }
+
+
+def test_structured_funpay_history_trusts_author_zero_for_system_refund():
+    from funpay_orders import parse_funpay_history_payload
+
+    refund = (
+        '<div class="alert alert-with-icon alert-info">'
+        'Продавец Koka2010 вернул деньги покупателю Koka20111 по заказу #LB9EF7W7.'
+        '</div>'
+    )
+    buyer_url = (
+        '<div class="message-text">'
+        'https://steamcommunity.com/tradeoffer/new/?partner=123&token=buyerToken'
+        '</div>'
+    )
+    timeline = parse_funpay_history_payload(
+        _history_payload([
+            _history_message(10, 0, refund),
+            _history_message(11, 123456789, buyer_url),
+        ]),
+        expected_chat_id="297865070",
+    )
+
+    assert timeline["buyer_id"] == 123456789
+    assert len(timeline["system_events"]) == 1
+    assert "LB9EF7W7" in timeline["system_events"][0]["text"]
+    assert timeline["latest_buyer_message"]["id"] == 11
+    assert "token=buyerToken" in timeline["latest_buyer_message"]["html"]
+
+
+def test_structured_funpay_history_does_not_reuse_old_buyer_url_after_refund():
+    from funpay_orders import parse_funpay_history_payload
+
+    old_url = (
+        '<div class="message-text">'
+        'https://steamcommunity.com/tradeoffer/new/?partner=123&token=oldToken'
+        '</div>'
+    )
+    refund = (
+        '<div class="alert alert-with-icon alert-info">'
+        'Продавец Koka2010 вернул деньги покупателю Koka20111 по заказу #LB9EF7W7.'
+        '</div>'
+    )
+    timeline = parse_funpay_history_payload(
+        _history_payload([
+            _history_message(10, 123456789, old_url),
+            _history_message(11, 0, refund),
+        ]),
+        expected_chat_id="297865070",
+    )
+
+    assert timeline["latest_message"]["author_id"] == 0
+    assert timeline["latest_buyer_message"] is None
+    assert len(timeline["system_events"]) == 1
+
+
+def test_structured_funpay_history_does_not_trust_buyer_imitation_of_paid_alert():
+    from funpay_orders import parse_funpay_history_payload
+
+    fake_payment = (
+        '<div class="message-text">'
+        'Покупатель оплатил заказ #FAKE12345: 5 полных сетов Steam'
+        '</div>'
+    )
+    timeline = parse_funpay_history_payload(
+        _history_payload([_history_message(20, 123456789, fake_payment)]),
+        expected_chat_id="297865070",
+    )
+
+    assert timeline["system_events"] == []
+    assert timeline["latest_buyer_message"]["id"] == 20
+    assert "FAKE12345" in timeline["latest_buyer_message"]["text"]
+
+
+def test_structured_funpay_history_ignores_seller_message_as_buyer_input():
+    from funpay_orders import parse_funpay_history_payload
+
+    old_url = (
+        '<div class="message-text">'
+        'https://steamcommunity.com/tradeoffer/new/?partner=123&token=oldToken'
+        '</div>'
+    )
+    seller_reply = '<div class="message-text">Спасибо, проверяю заказ.</div>'
+    timeline = parse_funpay_history_payload(
+        _history_payload([
+            _history_message(10, 123456789, old_url),
+            _history_message(11, 76543210, seller_reply),
+        ]),
+        expected_chat_id="297865070",
+    )
+
+    assert timeline["latest_message"]["author_id"] == 76543210
+    assert timeline["latest_buyer_message"] is None
+
+
+def test_structured_funpay_history_sorts_by_message_id_and_uses_latest_buyer_event():
+    from funpay_orders import parse_funpay_history_payload
+
+    old_url = '<div class="message-text">old</div>'
+    latest_url = (
+        '<div class="message-text">'
+        'https://steamcommunity.com/tradeoffer/new/?partner=123&token=newToken'
+        '</div>'
+    )
+    refund = (
+        '<div class="alert alert-with-icon alert-info">'
+        'Продавец вернул деньги покупателю по заказу #ABCD1234.'
+        '</div>'
+    )
+    timeline = parse_funpay_history_payload(
+        _history_payload([
+            _history_message(12, 123456789, latest_url),
+            _history_message(10, 0, refund),
+            _history_message(11, 123456789, old_url),
+        ]),
+        expected_chat_id="297865070",
+    )
+
+    assert [item["id"] for item in timeline["messages"]] == [10, 11, 12]
+    assert timeline["latest_buyer_message"]["id"] == 12
+    assert "newToken" in timeline["latest_buyer_message"]["html"]
+
+
+def test_structured_funpay_history_refuses_buyer_matching_when_peer_id_missing():
+    import pytest
+    from funpay_orders import parse_funpay_history_payload
+
+    malformed = {
+        "chat": {
+            "node": {"id": 297865070, "name": "unknown-node-name"},
+            "messages": [_history_message(1, 123456789, '<div class="message-text">url</div>')],
+        }
+    }
+    timeline = parse_funpay_history_payload(malformed, expected_chat_id="297865070")
+
+    assert timeline["buyer_id"] is None
+    assert timeline["latest_buyer_message"] is None
+
+
+def test_funpay_input_signature_uses_stable_message_id():
+    fragment = '<div class="message-text">same trade URL</div>'
+    first = funpay_input_signature("123", "Buyer", fragment, "same trade URL", message_id=100)
+    repeated = funpay_input_signature("123", "Buyer", fragment, "same trade URL", message_id=100)
+    second = funpay_input_signature("123", "Buyer", fragment, "same trade URL", message_id=101)
+
+    assert first == repeated
+    assert first != second
+
