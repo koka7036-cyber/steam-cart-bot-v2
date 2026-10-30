@@ -46,8 +46,14 @@ try {
 
             if ($exitCode -ne 2) {
                 Set-Location -LiteralPath $PSScriptRoot
-                & py -3 (Join-Path $PSScriptRoot 'bot.py')
-                $exitCode = $LASTEXITCODE
+                do {
+                    & py -3 (Join-Path $PSScriptRoot 'bot.py')
+                    $exitCode = $LASTEXITCODE
+                    if ($exitCode -eq 42) {
+                        Write-Host '[INFO] Telegram requested a restart. Relaunching bot...' -ForegroundColor Cyan
+                        Start-Sleep -Seconds 2
+                    }
+                } while ($exitCode -eq 42)
             }
         }
     } else {
