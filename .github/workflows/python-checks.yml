@@ -34,7 +34,7 @@ jobs:
       - name: Parse Windows deployment scripts
         shell: pwsh
         run: |
-          $files = @('update_bot.ps1', 'run_bot.ps1', 'configure_playerok.ps1', 'install_autostart.ps1', 'toggle_autostart_task.ps1', 'tests/test_update_bot_credential_manager.ps1')
+          $files = @('update_bot.ps1', 'run_bot.ps1', 'configure_playerok.ps1', 'install_autostart.ps1', 'toggle_autostart_task.ps1', 'tests/test_update_bot_credential_manager.ps1', 'tests/test_update_bot_integrity.ps1')
           foreach ($file in $files) {
             $tokens = $null
             $errors = $null
@@ -45,6 +45,9 @@ jobs:
             }
             Write-Host ('Parsed ' + $file)
           }
+          Write-Host 'Running updater local-integrity regression tests...'
+          & (Join-Path $PWD 'tests/test_update_bot_integrity.ps1')
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   playerok-sdk-smoke:
     runs-on: ubuntu-latest
