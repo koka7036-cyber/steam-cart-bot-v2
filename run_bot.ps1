@@ -45,11 +45,50 @@ try {
             }
 
             if ($exitCode -ne 2) {
+                [Environment]::SetEnvironmentVariable('CARD_BOT_NONINTERACTIVE', '1', 'Process')
                 Set-Location -LiteralPath $PSScriptRoot
                 do {
                     & py -3 (Join-Path $PSScriptRoot 'bot.py')
                     $exitCode = $LASTEXITCODE
-                    if ($exitCode -eq 42) {
+
+                    if ($exitCode -eq 43) {
+                        Write-Host '[INFO] Telegram requested a verified bot update.' -ForegroundColor Cyan
+                        $requestFile = Join-Path $PSScriptRoot '.bot_update_expected_sha.txt'
+                        $expectedSha = ''
+                        if (Test-Path -LiteralPath $requestFile -PathType Leaf) {
+                            $expectedSha = (Get-Content -LiteralPath $requestFile -Raw -ErrorAction SilentlyContinue).Trim()
+                        }
+
+                        if ($expectedSha -match '^[0-9a-f]{40}
+            }
+        }
+    } else {
+        Write-Output 'Bot already running; duplicate launch skipped.'
+    }
+} finally {
+    if ($held) { $mutex.ReleaseMutex() }
+    $mutex.Dispose()
+}
+
+exit $exitCode
+) {
+                            $updateScript = Join-Path $PSScriptRoot 'update_bot.ps1'
+                            Write-Host ('[INFO] Updating to verified commit ' + $expectedSha) -ForegroundColor Cyan
+                            & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $updateScript -WaitForBot -ExpectedSha $expectedSha
+                            $updateExitCode = $LASTEXITCODE
+                            if ($updateExitCode -ne 0) {
+                                Write-Host '[WARN] Update failed. The previous version will be restarted.' -ForegroundColor Yellow
+                            }
+                        } else {
+                            Write-Host '[WARN] Update request SHA is missing or invalid. Restarting current version.' -ForegroundColor Yellow
+                        }
+
+                        if (Test-Path -LiteralPath $requestFile -PathType Leaf) {
+                            Remove-Item -LiteralPath $requestFile -Force -ErrorAction SilentlyContinue
+                        }
+                        $exitCode = 42
+                        Start-Sleep -Seconds 2
+                    } elseif ($exitCode -eq 42) {
                         Write-Host '[INFO] Telegram requested a restart. Relaunching bot...' -ForegroundColor Cyan
                         Start-Sleep -Seconds 2
                     }
