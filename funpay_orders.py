@@ -15,7 +15,7 @@ from html.parser import HTMLParser
 from urllib.parse import parse_qs, urljoin, urlparse
 
 
-OPEN_STATUSES = {"awaiting_input", "input_received", "reserved", "review", "retry_required", "refund_review"}
+OPEN_STATUSES = {"awaiting_input", "input_received", "reserved", "review", "retry_required", "sending", "delivery_uncertain", "refund_review"}
 
 def count_cancelled_orders(orders) -> int:
     """Count cancelled/refunded FunPay orders once, including legacy refund flags."""
@@ -715,7 +715,7 @@ def register_payment(orders: dict, *, node_id: str, buyer: str, text: str,
         # same still-unfulfilled payment under a new chat node, follow that
         # authenticated system event so the buyer's subsequent trade URL can match.
         if (
-            existing.get("status") in OPEN_STATUSES
+            existing.get("status") in {"awaiting_input", "input_received", "reserved", "review", "retry_required"}
             and not existing.get("steam_trade_offer_id")
             and str(existing.get("node_id")) != str(node_id)
         ):
