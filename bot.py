@@ -1828,6 +1828,8 @@ def update_inventory_cache():
         assets, descriptions = collect_inventory_pages(fetch_inventory_page)
     except SteamInventoryRateLimitError:
         return None, "Steam вернул ошибку 429. Подожди 2 минуты."
+    except SteamInventoryPaginationError as e:
+        return None, str(e)
     except Exception as e:
         # Never replace the existing cache with a partial inventory snapshot.
         return None, f"Ошибка чтения инвентаря: {e}"
