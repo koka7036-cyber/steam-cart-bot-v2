@@ -25,41 +25,94 @@ try {
         exit 0
     }
     $headers = @{ 'User-Agent' = 'SteamCardsBot-Updater'; 'Accept' = 'application/vnd.github+json' }
-    # Private repository access: prefer environment token, otherwise use a DPAPI-protected
-    # token file tied to this Windows user. First run prompts once; the token is never logged.
-    $tokenFile = Join-Path $Root '.github_token.dpapi'
+    # Private repository access: use environment token when supplied, otherwise
+    # retrieve from Windows Credential Manager. Read-only repository access is enough.
+    $credentialTarget = 'SteamCardsBot-GitHubReadOnly'
     $githubToken = ''
     if ($env:GH_TOKEN) { $githubToken = $env:GH_TOKEN }
     elseif ($env:GITHUB_TOKEN) { $githubToken = $env:GITHUB_TOKEN }
-    elseif (Test-Path -LiteralPath $tokenFile) {
+    else {
+    try {
+        if (-not ('CardBot.CredentialManager' -as [type])) {
+            Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+namespace CardBot {
+public static class CredentialManager {
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct CREDENTIAL {
+        public UInt32 Flags;
+        public UInt32 Type;
+        public string TargetName;
+        public string Comment;
+        public System.Runtime.InteropServices.ComTypes.FILETIME LastWritten;
+        public UInt32 CredentialBlobSize;
+        public IntPtr CredentialBlob;
+        public UInt32 Persist;
+        public UInt32 AttributeCount;
+        public IntPtr Attributes;
+        public string TargetAlias;
+        public string UserName;
+    }
+    [DllImport("advapi32.dll", EntryPoint="CredReadW", CharSet=CharSet.Unicode, SetLastError=true)]
+    private static extern bool CredRead(string target, UInt32 type, UInt32 flags, out IntPtr credentialPtr);
+    [DllImport("advapi32.dll", EntryPoint="CredWriteW", CharSet=CharSet.Unicode, SetLastError=true)]
+    private static extern bool CredWrite(ref CREDENTIAL credential, UInt32 flags);
+    [DllImport("advapi32.dll", SetLastError=true)]
+    private static extern void CredFree(IntPtr buffer);
+    public static string Read(string target) {
+        IntPtr ptr;
+        if (!CredRead(target, 1, 0, out ptr)) return null;
         try {
-            $secureToken = Get-Content -LiteralPath $tokenFile -Raw | ConvertTo-SecureString
-            $ptr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureToken)
-            try { $githubToken = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr) }
-            finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr) }
-        } catch {
-            # DPAPI credentials are bound to the Windows user/profile that created them.
-            # Do not abort and do not delete the unreadable file automatically: fall through
-            # to the hidden prompt below so the user can re-enter a read-only token safely.
-            $githubToken = ''
-            Log 'Saved GitHub credential could not be decrypted for this Windows user; requesting token again. The existing credential file is preserved until a replacement is entered.'
+            CREDENTIAL c = (CREDENTIAL)Marshal.PtrToStructure(ptr, typeof(CREDENTIAL));
+            if (c.CredentialBlob == IntPtr.Zero || c.CredentialBlobSize == 0) return null;
+            return Marshal.PtrToStringUni(c.CredentialBlob, (int)c.CredentialBlobSize / 2);
+        } finally { CredFree(ptr); }
+    }
+    public static void Write(string target, string username, string secret) {
+        byte[] blob = Encoding.Unicode.GetBytes(secret);
+        GCHandle handle = GCHandle.Alloc(blob, GCHandleType.Pinned);
+        try {
+            CREDENTIAL c = new CREDENTIAL();
+            c.Type = 1;
+            c.TargetName = target;
+            c.UserName = username;
+            c.Persist = 2;
+            c.CredentialBlobSize = (UInt32)blob.Length;
+            c.CredentialBlob = handle.AddrOfPinnedObject();
+            if (!CredWrite(ref c, 0)) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+        } finally { handle.Free(); Array.Clear(blob, 0, blob.Length); }
+    }
+}
+}
+'@
         }
+        $githubToken = [CardBot.CredentialManager]::Read($credentialTarget)
+    } catch {
+        Log ('WARNING: Windows Credential Manager read failed: ' + $_.Exception.Message)
+        $githubToken = ''
+    }
     }
     if ([string]::IsNullOrWhiteSpace($githubToken)) {
-        Write-Host ''
-        Write-Host 'This GitHub repository is private. A read-only GitHub token is required for automatic updates.'
-        Write-Host 'Create a fine-grained token in your browser with access only to this repository and Contents: Read-only.'
-        $secureToken = Read-Host 'Paste GitHub token (input hidden)' -AsSecureString
-        if (-not $secureToken -or $secureToken.Length -eq 0) {
-            throw 'No GitHub token supplied. No files were changed.'
-        }
-        $ptr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureToken)
-        try { $githubToken = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr) }
-        finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr) }
-        # ConvertTo-SecureString/ConvertFrom-SecureString uses Windows DPAPI by default.
-        $secureToken | ConvertFrom-SecureString | Set-Content -LiteralPath $tokenFile -Encoding ASCII
+    Write-Host ''
+    Write-Host 'This GitHub repository is private. Enter a fine-grained read-only token once.'
+    Write-Host 'It will be saved in Windows Credential Manager for this Windows user.'
+    $secureToken = Read-Host 'GitHub token (input hidden)' -AsSecureString
+    if (-not $secureToken -or $secureToken.Length -eq 0) {
+        throw 'No GitHub token supplied. No files were changed.'
+    }
+    $ptr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureToken)
+    try { $githubToken = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr) }
+    finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr) }
+    try {
+        [CardBot.CredentialManager]::Write($credentialTarget, 'github-readonly', $githubToken)
+    } catch {
+        throw ('Could not save token in Windows Credential Manager. No token file was created. ' + $_.Exception.Message)
+    }
     }
     $headers['Authorization'] = 'Bearer ' + $githubToken
+
     # Use the commits list endpoint with the branch as a query parameter.
     # This avoids GitHub/API gateways interpreting slashes in branch names as URL path separators.
     $encodedBranch = [Uri]::EscapeDataString($Branch)
