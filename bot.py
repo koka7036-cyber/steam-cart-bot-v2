@@ -836,6 +836,7 @@ def funpay_check_unread_chats():
             try:
                 r_node = s.get(f"https://funpay.com/chat/?node={node_id}", timeout=10)
                 r_node.raise_for_status()
+                detail_html = r_node.text
                 # Restrict extraction to the most recent message wrapper. Looking at
                 # the last .chat-msg-text alone can accidentally reuse an old link
                 # when the buyer's latest message is an attachment.
@@ -864,6 +865,44 @@ def funpay_check_unread_chats():
             if not detail_loaded or not full_text.strip():
                 logging.warning("Детали последнего сообщения FunPay #node%s пока недоступны; повторим проверку.", node_id)
                 continue
+
+
+            # Replay system-authored payment confirmations from the visible chat history.
+            # A buyer's later trade URL can become the newest message and must not hide
+            # the earlier payment event. Keep all existing first-run and message handling
+            # behavior unchanged. Only trusted system alerts with explicit paid wording
+            # and a recognized set description may create a paid order.
+            try:
+                payment_events = extract_paid_order_events(detail_html)
+            except Exception:
+                payment_events = []
+                logging.exception("Не удалось извлечь историю системных уведомлений FunPay #node%s", node_id)
+
+            for payment_fragment, payment_text in payment_events:
+                if not is_paid_order_notification(payment_text):
+                    continue
+                event_sets, event_quantity = detect_order_sets_and_quantity(payment_text)
+                event_lower = payment_text.lower()
+                event_mentions_product = any(
+                    term in event_lower
+                    for term in ("карт", "сет", "level", "уровень", "steam", "карточ")
+                )
+                if event_sets not in (1, 5) or not event_mentions_product:
+                    continue
+                record, created = register_funpay_payment(
+                    node_id, sender_name, payment_text, event_sets, event_quantity
+                )
+                if created:
+                    order_no = record.get("funpay_order_number") or "не найден в тексте"
+                    bot.send_message(
+                        admin_id,
+                        f"⚠️ Оплачен заказ FunPay.\\n"
+                        f"Заказ: {order_no}\\n"
+                        f"Покупатель: {sender_name}\\n"
+                        f"Лот: {event_sets} сет. × {event_quantity} шт.\\n"
+                        f"Резерв: {record.get('status')}.\\n"
+                        "Ожидается Steam trade-ссылка обычным текстовым сообщением в чате FunPay."
+                    )
 
             lower_txt = full_text.lower()
             is_order_payment = (

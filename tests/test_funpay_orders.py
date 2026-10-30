@@ -1,6 +1,6 @@
 """Regression tests for safe FunPay order matching."""
 from funpay_orders import (decode_text_attachment, extract_last_chat_message_fragment, extract_steam_trade_url, extract_text_attachment_href, filter_reserved_assets, find_open_order_for_chat, funpay_cold_start_blockers, funpay_input_signature, inventory_cache_freshness_error, is_funpay_system_message, mark_input_received, register_payment, voucher_redemption_block_reason, voucher_reset_block_reason)
-from order_parser import is_paid_order_notification
+from order_parser import detect_order_sets_and_quantity, is_paid_order_notification
 
 
 def make_order(key, node_id="123", status="awaiting_input", updated_at=1):
@@ -479,3 +479,35 @@ def test_funpay_input_signature_distinguishes_a_new_message_with_same_url():
     first = '<div class="chat-msg"><span>17:23</span><p>same trade URL</p></div>'
     second = '<div class="chat-msg"><span>17:24</span><p>same trade URL</p></div>'
     assert funpay_input_signature("123", "Buyer", first, "same trade URL") != funpay_input_signature("123", "Buyer", second, "same trade URL")
+
+
+def test_extract_paid_order_events_ignores_buyer_imitation_and_collects_system_events():
+    from funpay_orders import extract_paid_order_events
+
+    html_doc = (
+        '<div class="chat-msg-item"><div role="alert" class="alert alert-info">'
+        'Покупатель Buyer оплатил заказ #ABCD1234: 1 сет Steam</div></div>'
+        '<div class="chat-msg-item"><div class="chat-msg-text">'
+        'Покупатель оплатил заказ #BAD99999: 5 сетов Steam'
+        '</div></div>'
+        '<div class="chat-msg-item"><div role="alert" class="alert alert-info">'
+        'Покупатель Other оплатил заказ #EFGH5678: 5 сетов Steam</div></div>'
+    )
+    events = extract_paid_order_events(html_doc)
+    assert len(events) == 2
+    assert "ABCD1234" in events[0][1]
+    assert "EFGH5678" in events[1][1]
+    assert all(is_funpay_system_message(fragment) for fragment, _ in events)
+
+
+def test_payment_event_with_unrecognized_order_description_is_not_inferred():
+    from funpay_orders import extract_paid_order_events
+
+    html_doc = (
+        '<div class="chat-msg-item"><div role="alert" class="alert alert-info">'
+        'Покупатель Buyer оплатил заказ #ABCD1234</div></div>'
+    )
+    events = extract_paid_order_events(html_doc)
+    assert len(events) == 1
+    assert detect_order_sets_and_quantity(events[0][1]) == (None, 1)
+
