@@ -644,7 +644,12 @@ def record_funpay_buyer_input(node_id, trade_url, input_kind):
                 return candidates[0], "in_progress", "Заказ уже обрабатывается; повторная отправка не выполняется."
             if len(candidates) == 1 and candidates[0].get("status") == "delivery_uncertain":
                 return candidates[0], "uncertain", "Результат предыдущей попытки неизвестен; повторная отправка заблокирована."
-            return None, "unmatched", "Не найден единственный подходящий оплаченный заказ."
+            # A definite rejection has no offer ID; keep the same reservation and
+            # allow a corrected URL to retry. Uncertain outcomes remain blocked above.
+            if len(candidates) == 1 and candidates[0].get("status") == "retry_required":
+                record = candidates[0]
+            else:
+                return None, "unmatched", "Не найден единственный подходящий оплаченный заказ."
 
         if record.get("steam_trade_offer_id") or record.get("status") in {
             "offer_sent", "offer_pending_confirmation", "completed", "cancelled"
