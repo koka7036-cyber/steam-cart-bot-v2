@@ -197,3 +197,26 @@ def test_collect_inventory_pages_raises_when_a_later_page_fails():
     with pytest.raises(RuntimeError, match="second page unavailable"):
         collect_inventory_pages(fetch_page)
 
+
+def test_collect_inventory_pages_rejects_assets_without_matching_descriptions():
+    with pytest.raises(SteamInventoryPaginationError, match="не вернул описание"):
+        collect_inventory_pages(
+            lambda cursor: {
+                "success": 1,
+                "assets": [asset(1)],
+                "descriptions": [],
+                "more_items": 0,
+            }
+        )
+
+
+def test_collect_inventory_pages_rejects_assets_without_class_or_instance_id():
+    with pytest.raises(SteamInventoryPaginationError, match="assetid/classid/instanceid"):
+        collect_inventory_pages(
+            lambda cursor: {
+                "success": 1,
+                "assets": [{"assetid": "1", "classid": "100"}],
+                "descriptions": [description("Card")],
+                "more_items": 0,
+            }
+        )
