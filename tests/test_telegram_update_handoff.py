@@ -100,6 +100,36 @@ def test_funpay_watcher_selects_last_customer_message_and_bounds_telegram_notice
     end = source.index("def funpay_background_worker", start)
     watcher = source[start:end]
     assert "extract_last_customer_message_fragment(detail_html)" in watcher
-    assert "if not last_message_html or not full_text.strip():" in watcher
+    assert "if not last_message_html or (not full_text.strip() and not attachment_href and not has_file):" in watcher
     assert "compact_funpay_text(safe_text, max_chars=900)" in watcher
     assert "payment_events = extract_paid_order_events(detail_html)" in watcher
+    assert "download_text_attachment(" in watcher
+    assert 'input_kind = "text_attachment"' in watcher
+    assert "seen_input_events[node_id] = input_signature" in watcher
+    assert "is_funpay_refund_notification(payment_text)" in watcher
+
+
+
+def test_funpay_order_flow_supports_text_attachments_refunds_and_exact_admin_selection():
+    source = read_project_file("bot.py")
+    assert "def register_funpay_refund(" in source
+    assert "restore_reservation_to_cache(reservation)" in source
+    assert 'record["status"] = "refund_review"' in source
+    assert "selected_order_key=selected_order_key" in source
+    assert 'call.data.startswith("fporderselect:")' in source
+    assert "pending_funpay_input_selections" in source
+    assert "Вложение не распознано как текстовый файл FunPay" in source
+
+
+def test_telegram_polling_http_timeout_exceeds_long_poll_timeout():
+    source = read_project_file("bot.py")
+    assert "bot.infinity_polling(timeout=25, request_timeout=45, skip_pending=False)" in source
+
+
+def test_refunded_orders_are_not_recreated_from_later_payment_history():
+    source = read_project_file("bot.py")
+    start = source.index("def register_funpay_payment")
+    end = source.index("def register_funpay_refund", start)
+    payment = source[start:end]
+    assert 'if order_number and str(order_number).upper() in refunds:' in payment
+    assert 'return None, False' in payment
