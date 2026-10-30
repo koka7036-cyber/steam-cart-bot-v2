@@ -564,7 +564,7 @@ def test_extract_last_customer_message_ignores_system_refund_notification():
 def test_compact_funpay_text_collapses_blank_layout_and_truncates():
     from funpay_orders import compact_funpay_text
 
-    source = "  FunPay   <div>оповещение</div>\\n\\n\\n   Продавец   вернул деньги "
+    source = "  FunPay   <div>оповещение</div>\n\n\n   Продавец   вернул деньги "
     assert compact_funpay_text(source) == "FunPay оповещение Продавец вернул деньги"
     shortened = compact_funpay_text("x" * 200, max_chars=80)
     assert len(shortened) <= 80
