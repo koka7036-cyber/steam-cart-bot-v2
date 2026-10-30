@@ -94,15 +94,20 @@ def test_legacy_warehouse_button_label_routes_to_stock_menu():
     assert '"📦 Склад": "stock"' in source
 
 
-def test_funpay_watcher_selects_last_customer_message_and_bounds_telegram_notice():
+def test_funpay_watcher_uses_trusted_history_and_bounds_telegram_notice():
     source = read_project_file("bot.py")
     start = source.index("def funpay_check_unread_chats")
-    end = source.index("def funpay_background_worker", start)
+    end = source.index("def handle_funpay_order_selection", start)
     watcher = source[start:end]
-    assert "extract_last_customer_message_fragment(detail_html)" in watcher
-    assert "if not last_message_html or (not full_text.strip() and not attachment_href and not has_file):" in watcher
+    assert '"https://funpay.com/chat/history"' in watcher
+    assert "parse_funpay_history_payload(" in watcher
+    assert 'timeline["system_events"]' in watcher
+    assert 'timeline["latest_buyer_message"]' in watcher
+    assert 'message_id=latest_buyer_message.get("id")' in watcher
+    assert "extract_paid_order_events(" not in watcher
+    assert "extract_last_customer_message_fragment(" not in watcher
+    assert "if not latest_buyer_message or (not full_text.strip() and not attachment_href and not has_file):" in watcher
     assert "compact_funpay_text(safe_text, max_chars=900)" in watcher
-    assert "payment_events = extract_paid_order_events(detail_html)" in watcher
     assert "download_text_attachment(" in watcher
     assert 'input_kind = "text_attachment"' in watcher
     assert "seen_input_events[node_id] = input_signature" in watcher
