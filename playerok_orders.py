@@ -232,6 +232,7 @@ def active_orders_for_chat(orders: dict, chat_id: Any) -> list[dict]:
         record for record in orders.values()
         if isinstance(record, dict)
         and _safe_id(record.get("chat_id")) == safe_chat_id
+        and not record.get("mapping_conflict")
         and record.get("fulfillment_status") in ACTIVE_INPUT_STATUSES
         and normalize_platform_status(record.get("platform_status")) not in CLOSED_FOR_INPUT_STATUSES
     ]
@@ -248,7 +249,10 @@ def mark_trade_url_received(orders: dict, *, chat_id: Any) -> tuple[dict | None,
     now = int(time.time())
     changed = not bool(record.get("trade_url_received"))
     record["trade_url_received"] = True
-    if record.get("fulfillment_status") not in {"confirmed", "rolled_back", "problem", "sent"}:
+    if record.get("mapping_conflict"):
+        # A buyer message must never clear a listing/quantity conflict.
+        record["fulfillment_status"] = "needs_review"
+    elif record.get("fulfillment_status") not in {"confirmed", "rolled_back", "problem", "sent"}:
         record["fulfillment_status"] = "needs_review" if record.get("sets") not in {1, 5} else "manual_review"
     if changed:
         record["updated_at"] = now
