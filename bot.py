@@ -2316,6 +2316,7 @@ def gen_codes_formatted(message):
 
 @bot.message_handler(func=lambda m: True)
 def handle_all_messages(message):
+    global restart_requested
     text = (message.text or "").strip()
     db = load_json(DB_FILE, {"admin_id": None, "vouchers": {}})
 
