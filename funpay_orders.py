@@ -862,6 +862,100 @@ def find_open_order_for_chat(orders: dict, node_id: str) -> dict | None:
     return candidates[0] if len(candidates) == 1 else None
 
 
+def summarize_funpay_chat_diagnostics(timeline: dict, orders: dict, node_id: str) -> dict:
+    """Build a read-only, URL-redacted summary of one live FunPay chat.
+
+    The function never returns message text, attachment URLs, access tokens, or
+    raw trade URLs. It is intended for an admin diagnostic command only.
+    """
+    if not isinstance(timeline, dict):
+        raise ValueError("Invalid FunPay timeline.")
+    orders = orders if isinstance(orders, dict) else {}
+    latest = timeline.get("latest_message")
+    latest_buyer = timeline.get("latest_buyer_message")
+
+    if not isinstance(latest, dict):
+        latest_summary = {
+            "message_id": None,
+            "author_id": None,
+            "author_kind": "empty",
+        }
+    else:
+        if latest.get("is_system"):
+            author_kind = "system"
+        elif latest.get("is_buyer"):
+            author_kind = "buyer"
+        elif latest.get("author_id") is None:
+            author_kind = "unknown"
+        else:
+            author_kind = "other"
+        latest_summary = {
+            "message_id": latest.get("id"),
+            "author_id": latest.get("author_id"),
+            "author_kind": author_kind,
+        }
+
+    input_summary = {
+        "message_id": None,
+        "has_trade_url": False,
+        "has_text_attachment": False,
+    }
+    if isinstance(latest_buyer, dict):
+        fragment = str(latest_buyer.get("html") or "")
+        text = str(latest_buyer.get("text") or "")
+        input_summary = {
+            "message_id": latest_buyer.get("id"),
+            "has_trade_url": bool(
+                extract_steam_trade_url(text) or extract_steam_trade_url(fragment)
+            ),
+            "has_text_attachment": bool(
+                extract_text_attachment_href(
+                    fragment,
+                    f"https://funpay.com/chat/?node={node_id}",
+                )
+            ),
+        }
+
+    system_event_summaries = []
+    for event in timeline.get("system_events", []):
+        if not isinstance(event, dict):
+            continue
+        event_text = str(event.get("text") or "")
+        order_number = extract_order_number(event_text)
+        key = f"fp-order-{order_number}" if order_number else None
+        record = orders.get(key) if key else None
+        system_event_summaries.append({
+            "message_id": event.get("id"),
+            "order_number": order_number,
+            "order_status": record.get("status") if isinstance(record, dict) else None,
+            "order_node_matches": (
+                str(record.get("node_id")) == str(node_id)
+                if isinstance(record, dict) else False
+            ),
+            "author_id": event.get("author_id"),
+        })
+
+    chat_orders = [
+        {
+            "order_number": item.get("funpay_order_number") or item.get("key"),
+            "status": item.get("status"),
+            "sets_total": item.get("sets_total"),
+            "has_reservation": isinstance(item.get("reservation"), dict),
+        }
+        for item in open_orders_for_chat(orders, node_id)
+    ]
+
+    return {
+        "chat_id": str(node_id),
+        "buyer_id": timeline.get("buyer_id"),
+        "message_count": len(timeline.get("messages", [])),
+        "latest": latest_summary,
+        "latest_buyer_input": input_summary,
+        "system_events": system_event_summaries,
+        "open_orders": chat_orders,
+    }
+
+
 def mark_input_received(record: dict, input_kind: str) -> None:
     """Mark that input arrived without storing its sensitive contents."""
     # Repeated events must not overwrite the first input or move an order
