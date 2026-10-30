@@ -188,6 +188,86 @@ class _AttachmentLinkParser(HTMLParser):
                 return
 
 
+class _FunPaySystemAlertParser(HTMLParser):
+    """Extract standalone FunPay system alert blocks, including alerts outside chat-msg wrappers."""
+
+    _VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
+
+    def __init__(self):
+        super().__init__(convert_charrefs=False)
+        self._parts = None
+        self._depth = 0
+        self.fragments = []
+
+    @staticmethod
+    def _is_system_alert(tag, attrs):
+        if tag.lower() not in {"div", "section"}:
+            return False
+        values = {key.lower(): (value or "") for key, value in attrs}
+        if values.get("role", "").lower() == "alert":
+            return True
+        classes = set(values.get("class", "").split())
+        return {"alert-with-icon", "alert-info"}.issubset(classes)
+
+    def handle_starttag(self, tag, attrs):
+        raw = self.get_starttag_text() or ""
+        if self._parts is None and self._is_system_alert(tag, attrs):
+            self._parts = [raw]
+            self._depth = 0 if tag.lower() in self._VOID_TAGS else 1
+            if self._depth == 0:
+                self.fragments.append(raw)
+                self._parts = None
+            return
+        if self._parts is not None:
+            self._parts.append(raw)
+            if tag.lower() not in self._VOID_TAGS:
+                self._depth += 1
+
+    def handle_startendtag(self, tag, attrs):
+        raw = self.get_starttag_text() or ""
+        if self._parts is None and self._is_system_alert(tag, attrs):
+            self.fragments.append(raw)
+        elif self._parts is not None:
+            self._parts.append(raw)
+
+    def handle_endtag(self, tag):
+        if self._parts is None:
+            return
+        self._parts.append(f"</{tag}>")
+        self._depth -= 1
+        if self._depth <= 0:
+            self.fragments.append("".join(self._parts))
+            self._parts = None
+            self._depth = 0
+
+    def handle_data(self, data):
+        if self._parts is not None:
+            self._parts.append(data)
+
+    def handle_entityref(self, name):
+        if self._parts is not None:
+            self._parts.append(f"&{name};")
+
+    def handle_charref(self, name):
+        if self._parts is not None:
+            self._parts.append(f"&#{name};")
+
+    def handle_comment(self, data):
+        if self._parts is not None:
+            self._parts.append(f"<!--{data}-->")
+
+
+def extract_funpay_system_alert_fragments(html_document: str) -> list[str]:
+    """Return trusted role=alert / FunPay alert-with-icon blocks from a chat page."""
+    parser = _FunPaySystemAlertParser()
+    try:
+        parser.feed(html_document or "")
+        parser.close()
+    except Exception:
+        return []
+    return list(parser.fragments)
+
+
 class _LastChatMessageParser(HTMLParser):
     """Extract the most recent top-level FunPay chat message without mixing old text into a new attachment."""
 
@@ -289,20 +369,26 @@ def extract_last_chat_message_fragment(html_document: str) -> str | None:
 
 
 def extract_paid_order_events(html_document: str) -> list[tuple[str, str]]:
-    """Return authenticated system payment messages from a FunPay chat page.
+    """Return authenticated system payment alerts, whether or not they use chat-msg wrappers.
 
-    Only FunPay alert/system message wrappers are accepted. Each result contains
-    the raw HTML fragment and its visible text; the caller must still validate
-    payment wording, product description and the associated chat identity.
+    FunPay can render its grey payment notification as a standalone alert block
+    outside the normal chat message wrappers. Include those alerts but never
+    infer payment from ordinary buyer-authored message text.
     """
+    candidates = extract_chat_message_fragments(html_document)
+    candidates.extend(extract_funpay_system_alert_fragments(html_document))
     events = []
-    for fragment in extract_chat_message_fragments(html_document):
+    seen_text = set()
+    for fragment in candidates:
+        if not is_funpay_system_message(fragment):
+            continue
         text = html.unescape(re.sub(r"<[^>]+>", " ", fragment))
         text = re.sub(r"\s+", " ", text).strip()
-        if text and is_funpay_system_message(fragment):
+        signature = text.casefold()
+        if text and signature not in seen_text:
+            seen_text.add(signature)
             events.append((fragment, text))
     return events
-
 
 def extract_text_attachment_href(html_fragment: str, base_url: str) -> str | None:
     """Return one trusted FunPay-hosted text attachment URL from message HTML.
@@ -484,18 +570,18 @@ def is_funpay_system_message(html_fragment: str) -> bool:
     """Trust payment text only inside FunPay's alert block used for system-authored messages."""
     if not html_fragment:
         return False
-    # FunPay's own parser identifies system messages via author_id == 0 and extracts
-    # message text from a div[role=alert] or .alert.alert-with-icon.alert-info.
-    # A buyer can imitate the wording but cannot make their chat message a system alert.
-    return bool(
-        re.search(r"<[^>]+\brole\s*=\s*(['\"])alert\1", html_fragment, re.IGNORECASE)
-        or re.search(
-            r"<[^>]+\bclass\s*=\s*(['\"])[^'\"]*\balert-with-icon\b[^'\"]*\balert-info\b[^'\"]*\1",
-            html_fragment,
-            re.IGNORECASE,
-        )
-    )
-
+    if re.search(r"<[^>]+\brole\s*=\s*(['\"])alert\1", html_fragment, re.IGNORECASE):
+        return True
+    # HTML class order is not significant; require both trusted FunPay alert classes.
+    for match in re.finditer(
+        r"<[^>]+\bclass\s*=\s*(['\"])(.*?)\1",
+        html_fragment,
+        re.IGNORECASE | re.DOTALL,
+    ):
+        classes = set(match.group(2).split())
+        if {"alert-with-icon", "alert-info"}.issubset(classes):
+            return True
+    return False
 
 def extract_order_number(text: str) -> str | None:
     """Extract a FunPay order identifier (which may contain letters)."""
