@@ -2692,10 +2692,22 @@ def funpay_chat_diagnostic_cmd(message):
     ])
 
     system_lines = []
+    timeline_event_text = {
+        str(event.get("id")): str(event.get("text") or "")
+        for event in timeline.get("system_events", [])
+        if isinstance(event, dict)
+    }
     for event in summary.get("system_events", []):
         event_id = event.get("order_number")
         if not event_id:
             continue
+        event_text = timeline_event_text.get(str(event.get("message_id")), "")
+        if is_funpay_refund_notification(event_text):
+            event_kind = "возврат"
+        elif is_paid_order_notification(event_text):
+            event_kind = "оплата"
+        else:
+            event_kind = "системное событие"
         # The diagnostic shows IDs and states only; it never prints message bodies.
         record = orders.get(f"fp-order-{event_id}")
         record_status = record.get("status") if isinstance(record, dict) else None
@@ -2704,7 +2716,7 @@ def funpay_chat_diagnostic_cmd(message):
             if isinstance(record, dict) else False
         )
         system_lines.append(
-            f"#{event_id}: "
+            f"{event_kind} #{event_id}: "
             f"{record_status or 'нет записи в журнале'}"
             + ("; чат совпадает" if node_match else ("; другой чат" if record else ""))
         )
@@ -2775,10 +2787,13 @@ def funpay_chat_diagnostic_cmd(message):
         blockers.append("несколько активных заказов — требуется точный выбор")
     if freshness_error:
         blockers.append("кэш склада не прошёл проверку свежести/целостности")
-    if open_orders and available_sets < min(
-        int(item.get("sets_total", 0) or 0) for item in open_orders
-    ):
-        blockers.append("доступного склада недостаточно для активного заказа")
+    unreserved_requirements = sum(
+        int(item.get("sets_total", 0) or 0)
+        for item in open_orders
+        if not item.get("has_reservation")
+    )
+    if unreserved_requirements and available_sets < unreserved_requirements:
+        blockers.append("доступного склада недостаточно для заказов без резерва")
     if not steam_ok:
         blockers.append("Steam-сессия отсутствует или устарела")
     if not asf_ok:
