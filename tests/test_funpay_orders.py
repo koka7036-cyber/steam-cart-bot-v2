@@ -1,6 +1,6 @@
 """Regression tests for safe FunPay order matching."""
 from funpay_orders import (decode_text_attachment, extract_last_chat_message_fragment, extract_steam_trade_url, extract_text_attachment_href, filter_reserved_assets, find_open_order_for_chat, funpay_cold_start_blockers, funpay_input_signature, inventory_cache_freshness_error, is_funpay_system_message, mark_input_received, register_payment, voucher_redemption_block_reason, voucher_reset_block_reason)
-from order_parser import is_paid_order_notification
+from order_parser import detect_order_sets_and_quantity, is_paid_order_notification
 
 
 def make_order(key, node_id="123", status="awaiting_input", updated_at=1):
