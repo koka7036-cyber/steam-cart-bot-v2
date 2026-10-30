@@ -356,6 +356,24 @@ def extract_chat_message_fragments(html_document: str) -> list[str]:
     return list(parser.messages)
 
 
+def extract_last_customer_message_fragment(html_document: str) -> str | None:
+    """Return the latest ordinary chat message, ignoring FunPay-authored system alerts."""
+    for fragment in reversed(extract_chat_message_fragments(html_document)):
+        if fragment and not is_funpay_system_message(fragment):
+            return fragment
+    return None
+
+
+def compact_funpay_text(value: str, max_chars: int | None = None) -> str:
+    """Convert an HTML fragment to compact visible text without layout whitespace."""
+    text = html.unescape(re.sub(r"<[^>]+>", " ", value or ""))
+    text = re.sub(r"\s+", " ", text).strip()
+    if max_chars is not None and max_chars >= 0 and len(text) > max_chars:
+        suffix = "… [сообщение сокращено]"
+        text = text[:max(0, max_chars - len(suffix))].rstrip() + suffix
+    return text
+
+
 def extract_last_chat_message_fragment(html_document: str) -> str | None:
     """Return only the newest chat message wrapper, so an older URL cannot trigger delivery for a newer file."""
     parser = _LastChatMessageParser()
@@ -637,6 +655,17 @@ def register_payment(orders: dict, *, node_id: str, buyer: str, text: str,
     key = payment_key(node_id, text)
     existing = orders.get(key)
     if isinstance(existing, dict):
+        # The order number is the stable FunPay identity. If FunPay exposes the
+        # same still-unfulfilled payment under a new chat node, follow that
+        # authenticated system event so the buyer's subsequent trade URL can match.
+        if (
+            existing.get("status") in OPEN_STATUSES
+            and not existing.get("steam_trade_offer_id")
+            and str(existing.get("node_id")) != str(node_id)
+        ):
+            existing["node_id"] = str(node_id)
+            existing["buyer"] = buyer
+            existing["updated_at"] = int(time.time())
         return existing, False
 
     now = int(time.time())
