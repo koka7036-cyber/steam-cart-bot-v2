@@ -382,6 +382,7 @@ def _run_update_check(chat_id, status_message_id):
 
 
 def begin_bot_update_check(chat_id):
+    pending_bot_update_by_chat.pop(chat_id, None)
     if update_restart_requested:
         bot.send_message(chat_id, "⏳ Обновление уже запускается. Дождись перезапуска бота.")
         return
