@@ -2,7 +2,8 @@ param(
     [switch]$Force,
     [switch]$CheckOnly,
     [switch]$WaitForBot,
-    [switch]$Restart
+    [switch]$Restart,
+    [string]$ExpectedSha
 )
 
 $ErrorActionPreference = 'Stop'
@@ -154,6 +155,9 @@ try {
     if ([string]::IsNullOrWhiteSpace($remoteSha) -or $remoteSha -notmatch '^[0-9a-f]{40}$') {
         throw 'GitHub returned an invalid commit SHA.'
     }
+    if ($ExpectedSha -and $remoteSha -ne $ExpectedSha) {
+        throw 'The main branch changed after the update check. Check for updates again before installing.'
+    }
 
     # Save a newly entered token only after the API accepted it and returned a valid SHA.
     if ($saveCredential) {
@@ -180,7 +184,7 @@ try {
 
     if ($WaitForBot) {
         $deadline = (Get-Date).AddSeconds(120)
-        while ((Get-BotProcesses).Count -gt 0 -and (Get-Date) -lt $deadline) {
+        while (((Get-BotProcesses).Count -gt 0 -or @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -and $_.CommandLine -match 'run_bot\.ps1' }).Count -gt 0) -and (Get-Date) -lt $deadline) {
             Start-Sleep -Seconds 1
         }
     }
@@ -303,5 +307,24 @@ try {
 } catch {
     Write-UpdateLog ('UPDATE FAILED: ' + $_.Exception.Message)
     Write-Output ('ERROR:' + $_.Exception.Message)
+    if ($Restart) {
+        $startFile = Join-Path $Root 'start.bat'
+        if (Test-Path -LiteralPath $startFile -PathType Leaf) {
+            $deadline = (Get-Date).AddSeconds(45)
+            while (((Get-BotProcesses).Count -gt 0 -or @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -and $_.CommandLine -match 'run_bot\.ps1' }).Count -gt 0) -and (Get-Date) -lt $deadline) {
+                Start-Sleep -Seconds 1
+            }
+            if ((Get-BotProcesses).Count -eq 0) {
+                $previousNonInteractive = $env:CARD_BOT_NONINTERACTIVE
+                $env:CARD_BOT_NONINTERACTIVE = '1'
+                try {
+                    Start-Process -FilePath $env:ComSpec -ArgumentList ('/d /c call "' + $startFile + '"') -WorkingDirectory $Root | Out-Null
+                } finally {
+                    $env:CARD_BOT_NONINTERACTIVE = $previousNonInteractive
+                }
+                Write-UpdateLog 'Old installed version restart requested after update failure.'
+            }
+        }
+    }
     exit 1
 }
