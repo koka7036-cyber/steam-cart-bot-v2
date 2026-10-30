@@ -538,3 +538,122 @@ def test_is_funpay_system_message_accepts_alert_classes_in_any_order():
         '<div class="alert-info alert-with-icon alert">Заказ оплачен</div>'
     )
 
+
+
+def test_extract_last_customer_message_ignores_system_refund_notification():
+    from funpay_orders import extract_last_customer_message_fragment
+
+    trade = (
+        '<div class="chat-msg-item"><div class="chat-msg-text">'
+        'https://steamcommunity.com/tradeoffer/new/?partner=123&token=abc'
+        '</div></div>'
+    )
+    refund = (
+        '<div class="chat-msg-item"><div role="alert" class="alert alert-info">'
+        'Продавец Koka2010 вернул деньги покупателю Koka20111 по заказу #LB9EF7W7.'
+        '</div></div>'
+    )
+    result = extract_last_customer_message_fragment(trade + refund)
+
+    assert result == trade
+    assert extract_steam_trade_url(result) == (
+        "https://steamcommunity.com/tradeoffer/new/?partner=123&token=abc"
+    )
+
+
+def test_compact_funpay_text_collapses_blank_layout_and_truncates():
+    from funpay_orders import compact_funpay_text
+
+    source = "  FunPay   <div>оповещение</div>\n\n\n   Продавец   вернул деньги "
+    assert compact_funpay_text(source) == "FunPay оповещение Продавец вернул деньги"
+    shortened = compact_funpay_text("x" * 200, max_chars=80)
+    assert len(shortened) <= 80
+    assert shortened.endswith("[сообщение сокращено]")
+
+
+def test_register_payment_rebinds_only_unfulfilled_order_to_current_chat():
+    order = make_order("fp-order-ABCD1234", node_id="111")
+    order["funpay_order_number"] = "ABCD1234"
+    order["status"] = "reserved"
+    orders = {order["key"]: order}
+
+    record, created = register_payment(
+        orders,
+        node_id="222",
+        buyer="Buyer",
+        text="Покупатель Buyer оплатил заказ #ABCD1234: 1 полный сет Steam",
+        sets_per_item=1,
+        quantity=1,
+    )
+
+    assert not created
+    assert record is order
+    assert record["node_id"] == "222"
+    assert record["buyer"] == "Buyer"
+
+
+def test_register_payment_does_not_rebind_an_order_with_existing_offer():
+    order = make_order("fp-order-ABCD1234", node_id="111", status="offer_sent")
+    order["funpay_order_number"] = "ABCD1234"
+    order["steam_trade_offer_id"] = "555"
+    orders = {order["key"]: order}
+
+    record, created = register_payment(
+        orders,
+        node_id="222",
+        buyer="Buyer",
+        text="Покупатель Buyer оплатил заказ #ABCD1234: 1 полный сет Steam",
+        sets_per_item=1,
+        quantity=1,
+    )
+
+    assert not created
+    assert record["node_id"] == "111"
+
+def test_screenshot_style_paid_notification_is_recognized_and_refund_is_not_payment():
+    paid = (
+        "Покупатель Koka20111 оплатил заказ #S8QXD5R4: Steam, Предметы, "
+        "1 ПОЛНЫЙ СЕТ КАРТОЧЕК STEAM | +100 XP | Карточки, 1 шт."
+    )
+    refund = (
+        "Продавец Koka2010 вернул деньги покупателю Koka20111 "
+        "по заказу #LB9EF7W7."
+    )
+    assert is_paid_order_notification(paid)
+    assert detect_order_sets_and_quantity(paid) == (1, 1)
+    assert not is_paid_order_notification(refund)
+
+
+
+def test_payment_history_extractor_keeps_paid_event_and_ignores_refund_alert():
+    from funpay_orders import extract_paid_order_events
+
+    html_doc = (
+        '<div class="chat-msg-item"><div role="alert" class="alert alert-info">'
+        'Покупатель Koka20111 оплатил заказ #S8QXD5R4: Steam, Предметы, '
+        '1 ПОЛНЫЙ СЕТ КАРТОЧЕК STEAM | +100 XP | Карточки, 1 шт.'
+        '</div></div>'
+        '<div class="chat-msg-item"><div role="alert" class="alert alert-info">'
+        'Продавец Koka2010 вернул деньги покупателю Koka20111 по заказу #LB9EF7W7.'
+        '</div></div>'
+    )
+
+    events = extract_paid_order_events(html_doc)
+    paid = [text for _fragment, text in events if is_paid_order_notification(text)]
+
+    assert len(paid) == 1
+    assert "#S8QXD5R4" in paid[0]
+    assert detect_order_sets_and_quantity(paid[0]) == (1, 1)
+
+
+
+def test_system_refund_only_chat_has_no_customer_message():
+    from funpay_orders import extract_last_customer_message_fragment
+
+    refund = (
+        '<div class="chat-msg-item"><div role="alert" class="alert alert-info">'
+        'Продавец Koka2010 вернул деньги покупателю Koka20111 по заказу #LB9EF7W7.'
+        '</div></div>'
+    )
+    assert extract_last_customer_message_fragment(refund) is None
+

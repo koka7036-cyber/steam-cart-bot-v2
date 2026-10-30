@@ -75,3 +75,31 @@ def test_autostart_embedded_helper_matches_utf8_bom_script_and_refreshes_stale_c
     assert 'encoding="utf-8-sig"' in bot_source
     assert "os.replace(temp_path, helper_path)" in bot_source
     assert "New-Object System.Text.UTF8Encoding($false)" in deployed
+
+
+def test_update_check_lock_is_released_on_startup_and_worker_failures():
+    source = read_project_file("bot.py")
+    start = source.index("def _release_bot_update_lock()")
+    end = source.index("@bot.callback_query_handler", start)
+    update_block = source[start:end]
+    assert "def _release_bot_update_lock()" in update_block
+    assert "finally:\n        release_once()" in update_block
+    assert "status = bot.send_message(" in update_block
+    assert "worker.start()" in update_block
+    assert "except Exception:\n        _release_bot_update_lock()" in update_block
+
+
+def test_legacy_warehouse_button_label_routes_to_stock_menu():
+    source = read_project_file("bot.py")
+    assert '"📦 Склад": "stock"' in source
+
+
+def test_funpay_watcher_selects_last_customer_message_and_bounds_telegram_notice():
+    source = read_project_file("bot.py")
+    start = source.index("def funpay_check_unread_chats")
+    end = source.index("def funpay_background_worker", start)
+    watcher = source[start:end]
+    assert "extract_last_customer_message_fragment(detail_html)" in watcher
+    assert "if not last_message_html or not full_text.strip():" in watcher
+    assert "compact_funpay_text(safe_text, max_chars=900)" in watcher
+    assert "payment_events = extract_paid_order_events(detail_html)" in watcher

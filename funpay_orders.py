@@ -194,7 +194,7 @@ class _FunPaySystemAlertParser(HTMLParser):
     _VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
 
     def __init__(self):
-        super().__init__(convert_charrefs=False)
+        super().__init__(convert_charrefs=True)
         self._parts = None
         self._depth = 0
         self.fragments = []
@@ -275,7 +275,7 @@ class _LastChatMessageParser(HTMLParser):
     _MESSAGE_CLASSES = {"chat-msg", "chat-msg-item", "chat-msg-container", "chat-msg-wrapper"}
 
     def __init__(self):
-        super().__init__(convert_charrefs=False)
+        super().__init__(convert_charrefs=True)
         self._depth = 0
         self._parts = None
         self.messages = []
@@ -354,6 +354,24 @@ def extract_chat_message_fragments(html_document: str) -> list[str]:
     except Exception:
         return []
     return list(parser.messages)
+
+
+def extract_last_customer_message_fragment(html_document: str) -> str | None:
+    """Return the latest ordinary chat message, ignoring FunPay-authored system alerts."""
+    for fragment in reversed(extract_chat_message_fragments(html_document)):
+        if fragment and not is_funpay_system_message(fragment):
+            return fragment
+    return None
+
+
+def compact_funpay_text(value: str, max_chars: int | None = None) -> str:
+    """Convert an HTML fragment to compact visible text without layout whitespace."""
+    text = html.unescape(re.sub(r"<[^>]+>", " ", value or ""))
+    text = re.sub(r"\s+", " ", text).strip()
+    if max_chars is not None and max_chars >= 0 and len(text) > max_chars:
+        suffix = "… [сообщение сокращено]"
+        text = text[:max(0, max_chars - len(suffix))].rstrip() + suffix
+    return text
 
 
 def extract_last_chat_message_fragment(html_document: str) -> str | None:
@@ -637,6 +655,17 @@ def register_payment(orders: dict, *, node_id: str, buyer: str, text: str,
     key = payment_key(node_id, text)
     existing = orders.get(key)
     if isinstance(existing, dict):
+        # The order number is the stable FunPay identity. If FunPay exposes the
+        # same still-unfulfilled payment under a new chat node, follow that
+        # authenticated system event so the buyer's subsequent trade URL can match.
+        if (
+            existing.get("status") in OPEN_STATUSES
+            and not existing.get("steam_trade_offer_id")
+            and str(existing.get("node_id")) != str(node_id)
+        ):
+            existing["node_id"] = str(node_id)
+            existing["buyer"] = buyer
+            existing["updated_at"] = int(time.time())
         return existing, False
 
     now = int(time.time())
