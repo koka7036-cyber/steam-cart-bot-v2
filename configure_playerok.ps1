@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 Write-Host ''
 Write-Host 'Playerok monitoring setup' -ForegroundColor Cyan
 Write-Host 'This uses an UNOFFICIAL third-party API client, not an official Playerok SDK.' -ForegroundColor Yellow
