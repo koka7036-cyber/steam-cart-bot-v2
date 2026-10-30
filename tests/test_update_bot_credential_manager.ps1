@@ -11,6 +11,13 @@ $scriptText = Get-Content -LiteralPath $source -Raw
 if (-not $scriptText) { throw 'Updater file is empty.' }
 if ($scriptText -notmatch 'SteamCardsBot-GitHubReadOnly') { throw 'Credential Manager target is missing.' }
 if ($scriptText -notmatch 'CredReadW' -or $scriptText -notmatch 'CredWriteW') { throw 'Credential Manager native read/write APIs are missing.' }
+if ($scriptText -notmatch '\$saveCredential\s*=\s*\$true') { throw 'Newly entered credentials must be marked for deferred saving.' }
+$apiIndex = $scriptText.IndexOf('$remoteCommits = Invoke-RestMethod')
+$saveIndex = $scriptText.IndexOf('[CardBot.CredentialManager]::Write($credentialTarget, ''github-readonly'', $githubToken)')
+$shaValidationIndex = $scriptText.IndexOf('GitHub returned an invalid commit SHA.')
+if ($apiIndex -lt 0 -or $saveIndex -lt 0 -or $shaValidationIndex -lt 0 -or $saveIndex -lt $shaValidationIndex) {
+    throw 'A newly entered token must be saved only after successful GitHub API validation.'
+}
 if ($scriptText -match '\.github_token\.dpapi') { throw 'Legacy DPAPI token file should not be used by this updater.' }
 if ($scriptText -notmatch 'c\.Persist\s*=\s*2') { throw 'Credential must persist across logons.' }
 if ($scriptText -notmatch 'c\.Type\s*=\s*1') { throw 'Credential must be stored as a generic credential.' }
