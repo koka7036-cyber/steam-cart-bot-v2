@@ -836,6 +836,7 @@ def funpay_check_unread_chats():
             try:
                 r_node = s.get(f"https://funpay.com/chat/?node={node_id}", timeout=10)
                 r_node.raise_for_status()
+                detail_html = r_node.text
                 # Restrict extraction to the most recent message wrapper. Looking at
                 # the last .chat-msg-text alone can accidentally reuse an old link
                 # when the buyer's latest message is an attachment.
@@ -872,7 +873,7 @@ def funpay_check_unread_chats():
             # behavior unchanged. Only trusted system alerts with explicit paid wording
             # and a recognized set description may create a paid order.
             try:
-                payment_events = extract_paid_order_events(r_node.text)
+                payment_events = extract_paid_order_events(detail_html)
             except Exception:
                 payment_events = []
                 logging.exception("Не удалось извлечь историю системных уведомлений FunPay #node%s", node_id)
