@@ -623,3 +623,25 @@ def test_screenshot_style_paid_notification_is_recognized_and_refund_is_not_paym
     assert detect_order_sets_and_quantity(paid) == (1, 1)
     assert not is_paid_order_notification(refund)
 
+
+
+def test_payment_history_extractor_keeps_paid_event_and_ignores_refund_alert():
+    from funpay_orders import extract_paid_order_events
+
+    html_doc = (
+        '<div class="chat-msg-item"><div role="alert" class="alert alert-info">'
+        'Покупатель Koka20111 оплатил заказ #S8QXD5R4: Steam, Предметы, '
+        '1 ПОЛНЫЙ СЕТ КАРТОЧЕК STEAM | +100 XP | Карточки, 1 шт.'
+        '</div></div>'
+        '<div class="chat-msg-item"><div role="alert" class="alert alert-info">'
+        'Продавец Koka2010 вернул деньги покупателю Koka20111 по заказу #LB9EF7W7.'
+        '</div></div>'
+    )
+
+    events = extract_paid_order_events(html_doc)
+    paid = [text for _fragment, text in events if is_paid_order_notification(text)]
+
+    assert len(paid) == 1
+    assert "#S8QXD5R4" in paid[0]
+    assert detect_order_sets_and_quantity(paid[0]) == (1, 1)
+
