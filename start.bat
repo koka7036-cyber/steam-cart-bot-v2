@@ -39,12 +39,14 @@ if not defined ASF_EXE (
   del "%TEMP%\cardbot_asf_path.txt" >nul 2>&1
 )
 
-if not defined ASF_EXE (
+if not defined ASF_EXE if not defined CARD_BOT_NONINTERACTIVE (
   echo ASF was not found automatically.
   echo Select ArchiSteamFarm.exe, or cancel to continue without ASF.
   powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Add-Type -AssemblyName System.Windows.Forms; $d=New-Object System.Windows.Forms.OpenFileDialog; $d.Title='Select ArchiSteamFarm.exe (Cancel to continue without ASF)'; $d.Filter='ArchiSteamFarm.exe|ArchiSteamFarm.exe|Executable files (*.exe)|*.exe'; $p=''; if($d.ShowDialog() -eq 'OK'){$p=$d.FileName}; [IO.File]::WriteAllText((Join-Path $env:TEMP 'cardbot_asf_path.txt'),$p,[Text.Encoding]::ASCII)"
   if exist "%TEMP%\cardbot_asf_path.txt" set /p ASF_EXE=<"%TEMP%\cardbot_asf_path.txt"
   del "%TEMP%\cardbot_asf_path.txt" >nul 2>&1
+) else if not defined ASF_EXE (
+  >> "%LOG%" echo [%date% %time%] Non-interactive startup: skipping ASF file picker.
 )
 
 if defined ASF_EXE if exist "!ASF_EXE!" (
@@ -69,8 +71,12 @@ if not exist "%~dp0run_bot.ps1" (
 )
 echo Starting Telegram bot...
 >> "%LOG%" echo [%date% %time%] Starting run_bot.ps1
-powershell.exe -NoProfile -NoExit -ExecutionPolicy Bypass -File "%~dp0run_bot.ps1"
+if defined CARD_BOT_NONINTERACTIVE (
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0run_bot.ps1"
+) else (
+  powershell.exe -NoProfile -NoExit -ExecutionPolicy Bypass -File "%~dp0run_bot.ps1"
+)
 echo.
 echo Launcher finished. Log: "%LOG%"
-pause
+if not defined CARD_BOT_NONINTERACTIVE pause
 endlocal
