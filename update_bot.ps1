@@ -125,8 +125,6 @@ public static class CredentialManager {
     if ([string]::IsNullOrWhiteSpace($remoteSha) -or $remoteSha -notmatch '^[0-9a-f]{40}$') {
         throw 'GitHub returned an invalid commit SHA.'
     }
-    if ([string]::IsNullOrWhiteSpace($remoteSha) -or $remoteSha -notmatch '^[0-9a-f]{40}$') {
-        throw 'GitHub returned an invalid commit SHA.'
     }
     if (Test-Path -LiteralPath $Marker) { $localSha = (Get-Content -LiteralPath $Marker -Raw -ErrorAction SilentlyContinue).Trim() }
     if (-not $Force -and $localSha -eq $remoteSha) {
@@ -199,9 +197,6 @@ public static class CredentialManager {
     Write-Host 'Update failed. The existing bot files were left in place or restored from backup.' -ForegroundColor Red
     exit 1
 }
-) {
-        throw 'GitHub returned an invalid commit SHA.'
-    }
 
     # Save a newly entered token only after GitHub has accepted it and returned
     # a valid commit SHA. A typo must never become a persistent bad credential.
