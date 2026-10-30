@@ -86,7 +86,8 @@ try {
     try {
         $zip = Join-Path $tempRoot 'source.zip'
         $extract = Join-Path $tempRoot 'source'
-        $zipUrl = "https://codeload.github.com/$Repo/zip/refs/heads/$Branch"
+        # Pin the archive to the exact commit whose SHA was checked above. The branch can move between API lookup and download.
+        $zipUrl = "https://codeload.github.com/$Repo/zip/$remoteSha"
         try {
             Invoke-WebRequest -Uri $zipUrl -OutFile $zip -Headers @{ 'User-Agent' = 'SteamCardsBot-Updater'; 'Authorization' = ('Bearer ' + $githubToken) } -TimeoutSec 90
         } catch {
