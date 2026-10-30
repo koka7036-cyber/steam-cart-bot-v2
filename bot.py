@@ -26,6 +26,17 @@ STEAM_PASSWORD = os.getenv("STEAM_PASSWORD", "")
 ASF_IPC_URL = "http://127.0.0.1:1242/Api/Command"
 
 BASE_DIR, DATA_DIR = resolve_runtime_paths(__file__, os.getenv("CARDBOT_DATA_DIR") or None)
+UPDATE_COMMIT_MARKER = os.path.join(BASE_DIR, ".bot_update_commit.txt")
+
+
+def get_installed_revision():
+    """Return the SHA written by the verified updater, never guess from local files."""
+    try:
+        with open(UPDATE_COMMIT_MARKER, "r", encoding="ascii") as marker_file:
+            revision = marker_file.read().strip().lower()
+        return revision if re.fullmatch(r"[0-9a-f]{40}", revision) else None
+    except OSError:
+        return None
 BAT_PATH = os.path.join(BASE_DIR, "start.bat")
 REG_RUN_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
 REG_APP_NAME = "CardBotFarmAutostart"
@@ -3155,8 +3166,11 @@ def handle_all_messages(message):
                 steam_status = "устарела по локальному таймеру; нужна повторная авторизация"
             else:
                 steam_status = "не найдена; нужна авторизация"
+            installed_revision = get_installed_revision()
+            revision_text = installed_revision[:12] if installed_revision else "не определена"
             diagnostics = (
                 "🔎 <b>Диагностика</b>\n"
+                f"Версия программы: <code>{html.escape(revision_text)}</code>\n"
                 f"Steam: {steam_status}; "
                 f"логин {'задан' if STEAM_LOGIN else 'не задан'}, ID {'задан' if STEAM_ID else 'не задан'}\n"
                 f"Кэш склада: {cache_status}\n"
