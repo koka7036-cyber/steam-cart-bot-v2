@@ -39,7 +39,10 @@ def is_funpay_refund_notification(order_text):
         r"\brefund(?:ed)?\b[\s\S]{0,160}\border\b",
         r"\bseller\b[\s\S]{0,120}\brefunded?\b[\s\S]{0,120}\bbuyer\b",
     )
-    has_order_number = bool(re.search(r"(?:заказ|order)\s*[№#]?\s*[A-Z0-9]{4,24}\b", text))
+    has_order_number = bool(re.search(
+        r"(?:заказ(?:у|а|ом)?|order)\s*[№#]?\s*[A-Z0-9]{4,24}\b",
+        text,
+    ))
     return has_order_number and any(re.search(pattern, text) for pattern in refund_markers)
 
 
