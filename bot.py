@@ -1702,8 +1702,8 @@ def start_cmd(message):
             message.chat.id,
             f"👋 **Комбайн v5.2 MULTI-MARKET (Изолированные базы FunPay / Playerok) запущен!**\n"
             f"🤖 Бот для покупателей: `@{BOT_USERNAME}`\n\n"
-            f"• Коды **FunPay** (🟢) и **Playerok** (🔵) теперь разделены и никогда не пересекаются.\n"
-            f"• Чтобы сбросить тестовый пин-код: `/reset КОД`",
+            f"• Заказы FunPay и Playerok учитываются раздельно.\n"
+            f"• Автовыдача остаётся отключённой до завершения проверок.",
             reply_markup=build_admin_keyboard(),
             parse_mode="Markdown"
         )
