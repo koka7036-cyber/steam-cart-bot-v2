@@ -214,7 +214,7 @@ try {
 
         $files = @(
             'bot.py', 'funpay_orders.py', 'order_parser.py', 'playerok_monitor.py',
-            'playerok_orders.py', 'runtime_paths.py', 'sales_analytics.py',
+            'playerok_orders.py', 'runtime_paths.py', 'sales_analytics.py', 'steam_inventory.py',
             'run_bot.ps1', 'start.bat', 'update_bot.ps1',
             'requirements.txt', 'requirements-playerok.txt',
             'configure_playerok.bat', 'configure_playerok.ps1',
@@ -225,7 +225,7 @@ try {
         $available = @($files | Where-Object {
             Test-Path -LiteralPath (Join-Path $source.FullName $_) -PathType Leaf
         })
-        foreach ($required in @('bot.py', 'start.bat', 'run_bot.ps1', 'update_bot.ps1')) {
+        foreach ($required in @('bot.py', 'steam_inventory.py', 'start.bat', 'run_bot.ps1', 'update_bot.ps1')) {
             if ($available -notcontains $required) {
                 throw ('Archive is missing required file: ' + $required)
             }
