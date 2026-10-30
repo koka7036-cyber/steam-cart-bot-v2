@@ -347,7 +347,7 @@ def funpay_ping_and_raise(force_raise=False):
         if force_raise or (time.time() - last_raise_attempt_ts >= 14400):
             prof = s.get(f"https://funpay.com/users/{user_id}/", timeout=15)
             prof.raise_for_status()
-            nodes = sorted(set(re.findall(r'https://funpay\\.com/lots/(\\d+)/trade', prof.text)))
+            nodes = sorted(set(re.findall(r'https://funpay\.com/lots/(\d+)/trade', prof.text)))
             attempt_time = time.time()
             cfg["last_raise_attempt_ts"] = attempt_time
 
@@ -361,7 +361,7 @@ def funpay_ping_and_raise(force_raise=False):
                     try:
                         trade_page = s.get(f"https://funpay.com/lots/{node_id}/trade", timeout=15)
                         trade_page.raise_for_status()
-                        g_match = re.search(r'data-game="(\\d+)"\\s+data-node="' + re.escape(str(node_id)) + r'"', trade_page.text)
+                        g_match = re.search(r'data-game="(\d+)"\s+data-node="' + re.escape(str(node_id)) + r'"', trade_page.text)
                         if not g_match:
                             failed_cnt += 1
                             continue
@@ -380,7 +380,7 @@ def funpay_ping_and_raise(force_raise=False):
                         resp.raise_for_status()
                         result = resp.json()
                         if "modal" in result:
-                            sub_nodes = re.findall(r'name="node_ids\\[\\]"\\s+value="(\\d+)"', result["modal"])
+                            sub_nodes = re.findall(r'name="node_ids\[\]"\s+value="(\d+)"', result["modal"])
                             if sub_nodes:
                                 resp = s.post(
                                     "https://funpay.com/lots/raise",
