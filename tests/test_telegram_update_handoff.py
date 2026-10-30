@@ -180,3 +180,15 @@ def test_funpay_watcher_extracts_plain_text_or_anchor_href_trade_url():
     watcher = source[start:end]
     assert "extract_steam_trade_url(full_text) or extract_steam_trade_url(last_message_html)" in watcher
 
+
+
+
+def test_telegram_diagnostics_show_verified_installed_commit_marker():
+    source = read_project_file("bot.py")
+    assert 'UPDATE_COMMIT_MARKER = os.path.join(BASE_DIR, ".bot_update_commit.txt")' in source
+    assert "def get_installed_revision():" in source
+    assert 're.fullmatch(r"[0-9a-f]{40}", revision)' in source
+    assert 'installed_revision = get_installed_revision()' in source
+    assert 'revision_text = installed_revision[:12] if installed_revision else "не определена"' in source
+    updater = read_project_file("update_bot.ps1")
+    assert "$Marker = Join-Path $Root '.bot_update_commit.txt'" in updater
