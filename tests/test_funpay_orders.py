@@ -645,3 +645,15 @@ def test_payment_history_extractor_keeps_paid_event_and_ignores_refund_alert():
     assert "#S8QXD5R4" in paid[0]
     assert detect_order_sets_and_quantity(paid[0]) == (1, 1)
 
+
+
+def test_system_refund_only_chat_has_no_customer_message():
+    from funpay_orders import extract_last_customer_message_fragment
+
+    refund = (
+        '<div class="chat-msg-item"><div role="alert" class="alert alert-info">'
+        'Продавец Koka2010 вернул деньги покупателю Koka20111 по заказу #LB9EF7W7.'
+        '</div></div>'
+    )
+    assert extract_last_customer_message_fragment(refund) is None
+
