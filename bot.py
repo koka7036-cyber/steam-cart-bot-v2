@@ -15,7 +15,7 @@ import urllib.parse
 import requests
 import rsa
 import telebot
-from telebot import types
+from telebot import types, apihelper
 from runtime_paths import resolve_runtime_paths
 
 # --- КОНФИГУРАЦИЯ ---
@@ -39,6 +39,9 @@ PLAYEROK_ORDERS_FILE = os.path.join(DATA_DIR, "playerok_orders.json")
 
 if not TG_TOKEN:
     raise RuntimeError("Установи переменную окружения TG_TOKEN перед запуском бота.")
+
+# Refresh the requests session periodically; this prevents stale idle Telegram HTTP sessions.
+apihelper.SESSION_TIME_TO_LIVE = 5 * 60
 
 bot = telebot.TeleBot(TG_TOKEN)
 
@@ -3290,7 +3293,8 @@ try:
     start_playerok_monitor()
     # Long-poll timeout is shorter than the HTTP read timeout so transient socket resets
     # are treated as retriable transport errors by pyTelegramBotAPI's infinity loop.
-    bot.infinity_polling(timeout=25, request_timeout=45, skip_pending=False)
+    # `timeout` is the synchronous TeleBot connection timeout. Do not pass `request_timeout` here.
+    bot.infinity_polling(timeout=45, skip_pending=False)
     if restart_requested:
         raise SystemExit(43 if update_restart_requested else 42)
 finally:
