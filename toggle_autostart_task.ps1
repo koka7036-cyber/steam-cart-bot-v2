@@ -1,4 +1,5 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 $taskName = 'CardBot - AutoStart'
 $startFile = Join-Path $PSScriptRoot 'start.bat'
 $logFile = Join-Path $PSScriptRoot 'autostart_task.log'
