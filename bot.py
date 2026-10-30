@@ -874,7 +874,10 @@ def register_funpay_payment(node_id, buyer, text, sets_per_item, quantity):
     order_number = extract_order_number(text)
     with funpay_orders_lock:
         data = load_funpay_orders()
-        refunds = data.setdefault("refunds", {})
+        refunds = data.get("refunds")
+        if not isinstance(refunds, dict):
+            refunds = {}
+            data["refunds"] = refunds
         if order_number and str(order_number).upper() in refunds:
             logging.info(
                 "Ignoring replayed paid event for already-refunded FunPay order %s.",
@@ -1440,8 +1443,11 @@ def funpay_check_unread_chats():
             )
 
             if not last_message_html or (not full_text.strip() and not attachment_href and not has_file):
-                # A latest system alert is not buyer input. Never fall back to an
-                # older trade URL in the same conversation after a refund/payment event.
+                # A latest system alert is not buyer input. Cancel any stale in-memory
+                # order-selection prompt for this chat; an older URL must not survive a refund.
+                for token, pending in list(pending_funpay_input_selections.items()):
+                    if str(pending.get("node_id")) == str(node_id):
+                        pending_funpay_input_selections.pop(token, None)
                 seen_msgs[node_id] = sig
                 changed = True
                 first_run = False
