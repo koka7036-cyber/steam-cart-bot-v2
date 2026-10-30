@@ -991,19 +991,9 @@ def record_funpay_buyer_input(node_id, trade_url, input_kind, selected_order_key
         else:
             record = find_open_order_for_chat(data["orders"], node_id)
         if not record:
-            candidates = [
-                item for item in data["orders"].values()
-            if not candidates:
-                logging.warning(
-                    "FunPay trade URL has no matching paid order: node=%s; total_orders=%s; open_statuses=%s",
-                    node_id,
-                    len(data["orders"]),
-                    sorted({
-                        str(item.get("status"))
-                        for item in data["orders"].values()
-                        if isinstance(item, dict)
-                    }),
-                )
+            if selected_order_key is not None:
+                return None, "unmatched", "Выбранный заказ больше не доступен."
+            candidates = open_orders_for_chat(data["orders"], node_id)
             if len(candidates) > 1:
                 logging.warning(
                     "FunPay trade URL is ambiguous: node=%s; candidate_orders=%s",
@@ -1014,13 +1004,17 @@ def record_funpay_buyer_input(node_id, trade_url, input_kind, selected_order_key
                     ],
                 )
                 return None, "ambiguous", "В этом чате несколько активных заказов."
-            if len(candidates) == 1 and candidates[0].get("status") == "sending":
-                return candidates[0], "in_progress", "Заказ уже обрабатывается; повторная отправка не выполняется."
-            if len(candidates) == 1 and candidates[0].get("status") == "delivery_uncertain":
-                return candidates[0], "uncertain", "Результат предыдущей попытки неизвестен; повторная отправка заблокирована."
+            logging.warning(
+                "FunPay trade URL has no matching paid order: node=%s; total_orders=%s; statuses=%s",
+                node_id,
+                len(data["orders"]),
+                sorted({
+                    str(item.get("status"))
+                    for item in data["orders"].values()
+                    if isinstance(item, dict)
+                }),
+            )
             return None, "unmatched", "Не найден единственный подходящий оплаченный заказ."
-        elif not record:
-            return None, "unmatched", "Выбранный заказ больше не доступен."
 
         if record.get("funpay_refunded") or record.get("status") in {"refunded", "refund_review"}:
             return record, "refunded", "Заказ возвращён или требует ручной проверки после возврата; Steam-отправка заблокирована."
