@@ -664,7 +664,7 @@ def extract_order_number(text: str) -> str | None:
         text or "",
         re.IGNORECASE,
     )
-    return match.group(1) if match else None
+    return match.group(1).upper() if match else None
 
 
 def payment_key(node_id: str, text: str) -> str:
