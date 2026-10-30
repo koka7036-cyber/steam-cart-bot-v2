@@ -50,7 +50,9 @@ def test_updater_checks_candidate_files_before_copy_and_preserves_rollback():
     assert "Copy failed; rolling back from" in updater
     assert "WriteAllText($Marker" in updater
     assert "'steam_inventory.py'" in updater
-    assert "foreach ($required in @('bot.py', 'steam_inventory.py', 'start.bat'" in updater
+    assert "$RequiredDeploymentFiles = @(" in updater
+    assert "'steam_inventory.py'" in updater
+    assert "foreach ($required in $RequiredDeploymentFiles)" in updater
 
 
 def test_new_github_token_is_saved_only_after_api_and_sha_validation():
