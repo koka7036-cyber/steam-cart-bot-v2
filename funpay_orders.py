@@ -298,7 +298,7 @@ def extract_paid_order_events(html_document: str) -> list[tuple[str, str]]:
     events = []
     for fragment in extract_chat_message_fragments(html_document):
         text = html.unescape(re.sub(r"<[^>]+>", " ", fragment))
-        text = re.sub(r"\\s+", " ", text).strip()
+        text = re.sub(r"\s+", " ", text).strip()
         if text and is_funpay_system_message(fragment):
             events.append((fragment, text))
     return events
