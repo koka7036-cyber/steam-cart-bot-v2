@@ -25,20 +25,20 @@ try {
         exit 0
     }
     $headers = @{ 'User-Agent' = 'SteamCardsBot-Updater'; 'Accept' = 'application/vnd.github+json' }
-# Private repository access: use environment token when supplied, otherwise
-# retrieve from Windows Credential Manager. Read-only repository access is enough.
-$credentialTarget = 'SteamCardsBot-GitHubReadOnly'
-$githubToken = ''
-if ($env:GH_TOKEN) { $githubToken = $env:GH_TOKEN }
-elseif ($env:GITHUB_TOKEN) { $githubToken = $env:GITHUB_TOKEN }
-else {
+    # Private repository access: use environment token when supplied, otherwise
+    # retrieve from Windows Credential Manager. Read-only repository access is enough.
+    $credentialTarget = 'SteamCardsBot-GitHubReadOnly'
+    $githubToken = ''
+    if ($env:GH_TOKEN) { $githubToken = $env:GH_TOKEN }
+    elseif ($env:GITHUB_TOKEN) { $githubToken = $env:GITHUB_TOKEN }
+    else {
     try {
         if (-not ('CardBot.CredentialManager' -as [type])) {
             Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-using System.Text;
-namespace CardBot {
+    using System;
+    using System.Runtime.InteropServices;
+    using System.Text;
+    namespace CardBot {
     public static class CredentialManager {
         [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
         private struct CREDENTIAL {
@@ -85,16 +85,16 @@ namespace CardBot {
             } finally { handle.Free(); Array.Clear(blob, 0, blob.Length); }
         }
     }
-}
-'@
+    }
+    '@
         }
         $githubToken = [CardBot.CredentialManager]::Read($credentialTarget)
     } catch {
         Log ('WARNING: Windows Credential Manager read failed: ' + $_.Exception.Message)
         $githubToken = ''
     }
-}
-if ([string]::IsNullOrWhiteSpace($githubToken)) {
+    }
+    if ([string]::IsNullOrWhiteSpace($githubToken)) {
     Write-Host ''
     Write-Host 'This GitHub repository is private. Enter a fine-grained read-only token once.'
     Write-Host 'It will be saved in Windows Credential Manager for this Windows user.'
@@ -110,8 +110,8 @@ if ([string]::IsNullOrWhiteSpace($githubToken)) {
     } catch {
         throw ('Could not save token in Windows Credential Manager. No token file was created. ' + $_.Exception.Message)
     }
-}
-$headers['Authorization'] = 'Bearer ' + $githubToken
+    }
+    $headers['Authorization'] = 'Bearer ' + $githubToken
 
     # Use the commits list endpoint with the branch as a query parameter.
     # This avoids GitHub/API gateways interpreting slashes in branch names as URL path separators.
