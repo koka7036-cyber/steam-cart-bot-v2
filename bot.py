@@ -169,7 +169,7 @@ try {
         $operation = 'DISABLED'
     } elseif ($null -eq $existing -or $existing.State -eq 'Disabled') {
         if (-not (Test-Path -LiteralPath $startFile -PathType Leaf)) {
-            throw ('Не найден start.bat рядом с ботом: ' + $startFile + '; задача не изменена.')
+            throw ('Не найден файл запуска: ' + $startFile + '; задача не изменена.')
         }
         $user = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
         $action = New-ScheduledTaskAction -Execute (Join-Path $env:WINDIR 'System32\cmd.exe') -Argument ('/d /c set CARD_BOT_NONINTERACTIVE=1&& call "' + $startFile + '"') -WorkingDirectory $PSScriptRoot
@@ -201,22 +201,44 @@ try {
 } finally {
     if ($locked) { $mutex.ReleaseMutex() }
     $mutex.Dispose()
-}
-"""
+}"""
 def _ensure_autostart_helper():
-    """Write the fixed helper only when the updater has not deployed it yet."""
-    if os.path.isfile(AUTOSTART_PS_SCRIPT_PATH):
-        return True
+    """Refresh the generated helper atomically whenever its embedded template changes."""
+    helper_path = AUTOSTART_PS_SCRIPT_PATH
+    helper_parent = os.path.dirname(helper_path)
+    expected = _AUTOSTART_HELPER_FALLBACK.replace("\r\n", "\n").rstrip("\n") + "\n"
+    temp_path = None
     try:
-        os.makedirs(os.path.dirname(AUTOSTART_PS_SCRIPT_PATH), exist_ok=True)
-        with open(AUTOSTART_PS_SCRIPT_PATH, "w", encoding="utf-8-sig", newline="\r\n") as helper_file:
-            helper_file.write(_AUTOSTART_HELPER_FALLBACK)
-        logging.info("Bootstrapped Windows auto-start helper at %s", AUTOSTART_PS_SCRIPT_PATH)
+        os.makedirs(helper_parent, exist_ok=True)
+        if os.path.isfile(helper_path):
+            try:
+                with open(helper_path, "r", encoding="utf-8-sig", newline=None) as current_file:
+                    current = current_file.read().replace("\r\n", "\n").replace("\r", "\n")
+                if current == expected:
+                    return True
+            except (OSError, UnicodeError):
+                pass
+
+        fd, temp_path = tempfile.mkstemp(
+            prefix=".toggle-autostart-",
+            suffix=".tmp",
+            dir=helper_parent,
+        )
+        with os.fdopen(fd, "w", encoding="utf-8-sig", newline="\r\n") as helper_file:
+            helper_file.write(expected)
+            helper_file.flush()
+            os.fsync(helper_file.fileno())
+        os.replace(temp_path, helper_path)
+        logging.info("Refreshed Windows auto-start helper at %s", helper_path)
         return True
     except OSError as exc:
-        logging.warning("Could not bootstrap Windows auto-start helper: %s", type(exc).__name__)
+        logging.warning("Could not refresh Windows auto-start helper: %s", type(exc).__name__)
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
         return False
-
 
 def is_autostart_enabled():
     """Read the task's Enabled flag from Task Scheduler, not its runtime state."""
@@ -247,7 +269,7 @@ def toggle_autostart():
         result = subprocess.run(
             ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive",
              "-ExecutionPolicy", "Bypass", "-File", AUTOSTART_PS_SCRIPT_PATH],
-            capture_output=True, text=True, timeout=20, check=False,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20, check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         logging.warning("Windows auto-start helper failed: %s", type(exc).__name__)
