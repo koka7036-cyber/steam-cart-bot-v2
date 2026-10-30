@@ -252,8 +252,15 @@ def toggle_autostart():
         return before, "Не удалось выполнить команду управления автозапуском Windows."
     if result.returncode != 0:
         logging.warning("Windows auto-start helper exited with code %s", result.returncode)
-        detail = (result.stderr or "").strip().splitlines()
-        return before, "Windows не подтвердила изменение автозапуска. " + (detail[-1][:250] if detail else "Проверь autostart_task.log.")
+        # Preserve parser context: the last line alone often only says
+        # FullyQualifiedErrorId: UnexpectedToken and hides the useful location.
+        detail = (result.stderr or result.stdout or "").strip().splitlines()
+        detail_text = " | ".join(line.strip() for line in detail[-6:] if line.strip())
+        if detail_text:
+            detail_text = detail_text[-900:]
+        else:
+            detail_text = "PowerShell не вернул подробности; autostart_task.log может отсутствовать, если скрипт не запустился."
+        return before, "Windows не подтвердила изменение автозапуска. " + detail_text
     after = is_autostart_enabled()
     if after == before:
         return after, "Windows не подтвердила переключение автозапуска. Проверь Планировщик заданий."
