@@ -217,6 +217,49 @@ def test_extract_last_chat_message_fragment_returns_latest_text():
     assert "old" not in extract_last_chat_message_fragment(html_doc)
 
 
+def test_restore_reserved_assets_is_idempotent():
+    from funpay_orders import restore_reserved_assets
+
+    cache = {"games": {"Game": {"Card A": ["10"]}}, "total_cards": 1}
+    reservation = {
+        "asset_ids": ["11", "12"],
+        "asset_locations": [
+            {"game": "Game", "card": "Card A", "asset_id": "11"},
+            {"game": "Game", "card": "Card B", "asset_id": "12"},
+        ],
+    }
+
+    once = restore_reserved_assets(cache, reservation)
+    twice = restore_reserved_assets(once, reservation)
+
+    assert once is not None
+    assert twice is not None
+    assert twice["games"]["Game"]["Card A"] == ["10", "11"]
+    assert twice["games"]["Game"]["Card B"] == ["12"]
+    assert twice["total_cards"] == 3
+    assert cache["games"]["Game"]["Card A"] == ["10"]
+
+
+def test_restore_reserved_assets_rejects_malformed_reservation_without_mutating_cache():
+    from funpay_orders import restore_reserved_assets
+
+    cache = {"games": {"Game": {"Card A": ["10"]}}, "total_cards": 1}
+    before = {
+        "games": {"Game": {"Card A": ["10"]}},
+        "total_cards": 1,
+    }
+    malformed = {
+        "asset_ids": ["11", "11"],
+        "asset_locations": [
+            {"game": "Game", "card": "Card A", "asset_id": "11"},
+            {"game": "Game", "card": "Card B", "asset_id": "11"},
+        ],
+    }
+
+    assert restore_reserved_assets(cache, malformed) is None
+    assert cache == before
+
+
 def test_filter_reserved_assets_excludes_pending_and_uncertain_offers():
     cache = {
         "total_cards": 4,
