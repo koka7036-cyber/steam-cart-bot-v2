@@ -510,12 +510,13 @@ def migrate_funpay_delivery_config():
     if "allow_chat_trade_url" not in cfg:
         cfg["allow_chat_trade_url"] = True
         changed = True
-    # This is the bot's own delivery switch, not FunPay's marketplace setting.
-    if "auto_delivery_funpay" not in cfg:
+    # Safety release gate: pause custom delivery once on the first startup
+    # with workflow v4, until a controlled end-to-end test has passed.
+    # An administrator may explicitly re-enable it after that test.
+    workflow_version = int(cfg.get("funpay_workflow_version", 0) or 0)
+    if workflow_version < 4:
         cfg["auto_delivery_funpay"] = False
-        changed = True
-    if int(cfg.get("funpay_workflow_version", 0) or 0) < 3:
-        cfg["funpay_workflow_version"] = 3
+        cfg["funpay_workflow_version"] = 4
         changed = True
     if changed:
         save_json(FP_CONFIG_FILE, cfg)
