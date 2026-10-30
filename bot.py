@@ -1206,9 +1206,10 @@ def _report_funpay_input_result(admin_id, node_id, input_record, input_result, d
             f"Автообмен не выполнялся. {detail}"
         )
     elif input_result == "ambiguous":
-        candidates = open_orders_for_chat(load_funpay_orders().get("orders", {}), node_id)
-        _queue_funpay_order_selection(
-            admin_id, node_id, "", detail, input_kind, candidates
+        bot.send_message(
+            admin_id,
+            f"⚠️ Для чата FunPay #{node_id} осталось несколько активных заказов. "
+            "Без нового подтверждённого выбора отправка остановлена."
         )
     elif input_result == "unmatched":
         bot.send_message(
@@ -1541,6 +1542,84 @@ def funpay_check_unread_chats():
             save_json(FP_CONFIG_FILE, cfg)
     except Exception:
         logging.exception("Ошибка проверки непрочитанных чатов FunPay")
+@bot.callback_query_handler(func=lambda call: bool(call.data) and call.data.startswith("fporderselect:"))
+def handle_funpay_order_selection(call):
+    """Deliver only after the admin selects one exact active order from the same chat."""
+    db = load_json(DB_FILE, {"admin_id": None, "vouchers": {}})
+    admin_id = db.get("admin_id")
+    if (
+        not admin_id
+        or not call.from_user
+        or call.from_user.id != admin_id
+        or not call.message
+        or call.message.chat.id != admin_id
+        or call.message.chat.type != "private"
+    ):
+        bot.answer_callback_query(call.id, "Нет доступа.")
+        return
+
+    parts = (call.data or "").split(":")
+    if len(parts) != 3:
+        bot.answer_callback_query(call.id, "Некорректный выбор.")
+        return
+    token = parts[1]
+    try:
+        index = int(parts[2])
+    except ValueError:
+        bot.answer_callback_query(call.id, "Некорректный выбор.")
+        return
+
+    pending = pending_funpay_input_selections.get(token)
+    if not isinstance(pending, dict):
+        bot.answer_callback_query(call.id, "Выбор истёк. Попроси покупателя отправить ссылку ещё раз.")
+        return
+    if (
+        int(pending.get("admin_id", 0) or 0) != int(admin_id)
+        or time.time() - float(pending.get("created_at", 0) or 0) > 600
+    ):
+        pending_funpay_input_selections.pop(token, None)
+        bot.answer_callback_query(call.id, "Выбор истёк.")
+        return
+
+    order_keys = pending.get("order_keys", [])
+    if not isinstance(order_keys, list) or index < 0 or index >= len(order_keys):
+        bot.answer_callback_query(call.id, "Заказ не найден.")
+        return
+
+    # Pop before the network request: Telegram callback retries cannot send twice.
+    pending_funpay_input_selections.pop(token, None)
+    selected_order_key = str(order_keys[index])
+    node_id = str(pending.get("node_id"))
+    trade_url = pending.get("trade_url")
+    input_kind = str(pending.get("input_kind") or "chat_trade_url")
+    if not isinstance(trade_url, str) or not extract_steam_trade_url(trade_url):
+        bot.answer_callback_query(call.id, "Ссылка больше недоступна. Попроси покупателя прислать её снова.")
+        return
+
+    bot.answer_callback_query(call.id, "Заказ выбран. Проверяю статус и резерв.")
+    try:
+        input_record, input_result, detail = record_funpay_buyer_input(
+            node_id,
+            trade_url,
+            input_kind,
+            selected_order_key=selected_order_key,
+        )
+        _report_funpay_input_result(
+            admin_id, node_id, input_record, input_result, detail, input_kind
+        )
+    except Exception:
+        logging.exception(
+            "FunPay selected-order delivery failed: node=%s order=%s",
+            node_id,
+            selected_order_key,
+        )
+        bot.send_message(
+            admin_id,
+            f"🚨 Не удалось обработать выбранный заказ {selected_order_key}. "
+            "Ссылка не записана в журнал; проверь статус сделки и историю Steam вручную."
+        )
+
+
 def funpay_background_worker():
     # The owner explicitly approved this custom chat-based fulfillment workflow.
     # It does not activate FunPay's built-in "Automatic delivery" field or send external links.
