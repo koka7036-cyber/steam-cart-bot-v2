@@ -15,7 +15,7 @@ from html.parser import HTMLParser
 from urllib.parse import parse_qs, urljoin, urlparse
 
 
-OPEN_STATUSES = {"awaiting_input", "input_received", "reserved", "review", "retry_required"}
+OPEN_STATUSES = {"awaiting_input", "input_received", "reserved", "review", "retry_required", "sending", "delivery_uncertain", "refund_review"}
 
 def count_cancelled_orders(orders) -> int:
     """Count cancelled/refunded FunPay orders once, including legacy refund flags."""
@@ -288,7 +288,9 @@ class _LastChatMessageParser(HTMLParser):
                 class_value = value or ""
                 break
         classes = set(class_value.split())
-        is_message = tag.lower() in {"div", "li"} and bool(classes & self._MESSAGE_CLASSES)
+        is_message = (
+            tag.lower() in {"div", "li"} and bool(classes & self._MESSAGE_CLASSES)
+        ) or _FunPaySystemAlertParser._is_system_alert(tag, attrs)
 
         if self._parts is None and is_message:
             self._parts = [raw]
@@ -311,7 +313,9 @@ class _LastChatMessageParser(HTMLParser):
                 class_value = value or ""
                 break
         classes = set(class_value.split())
-        is_message = tag.lower() in {"div", "li"} and bool(classes & self._MESSAGE_CLASSES)
+        is_message = (
+            tag.lower() in {"div", "li"} and bool(classes & self._MESSAGE_CLASSES)
+        ) or _FunPaySystemAlertParser._is_system_alert(tag, attrs)
         if self._parts is None and is_message:
             self.messages.append(raw)
         elif self._parts is not None:
@@ -357,11 +361,16 @@ def extract_chat_message_fragments(html_document: str) -> list[str]:
 
 
 def extract_last_customer_message_fragment(html_document: str) -> str | None:
-    """Return the latest ordinary chat message, ignoring FunPay-authored system alerts."""
-    for fragment in reversed(extract_chat_message_fragments(html_document)):
-        if fragment and not is_funpay_system_message(fragment):
-            return fragment
-    return None
+    """Return the latest timeline event only when it was authored by the buyer.
+
+    A system alert at the end of the chat must not cause an older buyer URL or
+    attachment to be replayed as if it were a new message.
+    """
+    fragments = extract_chat_message_fragments(html_document)
+    if not fragments:
+        return None
+    latest = fragments[-1]
+    return None if is_funpay_system_message(latest) else latest
 
 
 def compact_funpay_text(value: str, max_chars: int | None = None) -> str:
@@ -372,6 +381,53 @@ def compact_funpay_text(value: str, max_chars: int | None = None) -> str:
         suffix = "… [сообщение сокращено]"
         text = text[:max(0, max_chars - len(suffix))].rstrip() + suffix
     return text
+
+
+def download_text_attachment(session, attachment_url: str,
+                            max_bytes: int = _MAX_TEXT_ATTACHMENT_BYTES) -> str:
+    """Download one small, trusted FunPay text attachment and decode it safely.
+
+    Redirects outside FunPay, HTML/login pages, oversized files and binary data
+    are rejected before a trade URL can be extracted from the content.
+    """
+    if not _is_trusted_funpay_url(attachment_url):
+        raise ValueError("Ссылка на вложение находится вне домена FunPay.")
+
+    response = session.get(attachment_url, timeout=10, stream=True)
+    try:
+        response.raise_for_status()
+        final_url = getattr(response, "url", attachment_url) or attachment_url
+        if not _is_trusted_funpay_url(final_url):
+            raise ValueError("FunPay перенаправил скачивание на недоверенный домен.")
+
+        headers = getattr(response, "headers", {}) or {}
+        content_type = str(headers.get("Content-Type", "")).lower()
+        if "text/html" in content_type:
+            raise ValueError("FunPay вернул HTML вместо текстового файла.")
+
+        content_length = str(headers.get("Content-Length", "")).strip()
+        if content_length.isdigit() and int(content_length) > max_bytes:
+            raise ValueError(f"Текстовый файл превышает лимит {max_bytes} байт.")
+
+        payload = bytearray()
+        iterator = getattr(response, "iter_content", None)
+        if callable(iterator):
+            chunks = iterator(chunk_size=8192)
+        else:
+            chunks = (getattr(response, "content", b""),)
+
+        for chunk in chunks:
+            if not chunk:
+                continue
+            payload.extend(chunk)
+            if len(payload) > max_bytes:
+                raise ValueError(f"Текстовый файл превышает лимит {max_bytes} байт.")
+
+        return decode_text_attachment(bytes(payload), max_bytes=max_bytes)
+    finally:
+        close = getattr(response, "close", None)
+        if callable(close):
+            close()
 
 
 def extract_last_chat_message_fragment(html_document: str) -> str | None:
@@ -558,7 +614,7 @@ def funpay_cold_start_blockers(orders: dict) -> list[tuple[str, str]]:
             blockers.append((str(key), "invalid_record"))
             continue
         status = str(record.get("status", "unknown"))
-        if status not in {"completed", "cancelled"} or record.get("reservation"):
+        if status not in {"completed", "cancelled", "refunded"} or record.get("reservation"):
             blockers.append((str(key), status))
     return blockers
 
@@ -608,7 +664,7 @@ def extract_order_number(text: str) -> str | None:
         text or "",
         re.IGNORECASE,
     )
-    return match.group(1) if match else None
+    return match.group(1).upper() if match else None
 
 
 def payment_key(node_id: str, text: str) -> str:
@@ -659,7 +715,7 @@ def register_payment(orders: dict, *, node_id: str, buyer: str, text: str,
         # same still-unfulfilled payment under a new chat node, follow that
         # authenticated system event so the buyer's subsequent trade URL can match.
         if (
-            existing.get("status") in OPEN_STATUSES
+            existing.get("status") in {"awaiting_input", "input_received", "reserved", "review", "retry_required"}
             and not existing.get("steam_trade_offer_id")
             and str(existing.get("node_id")) != str(node_id)
         ):

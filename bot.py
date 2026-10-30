@@ -10,6 +10,7 @@ import string
 import tempfile
 import winreg
 import threading
+import uuid
 import urllib.parse
 import requests
 import rsa
@@ -556,6 +557,7 @@ active_reply_target = {}
 pending_customer_codes = {}
 delivery_lock = threading.Lock()
 funpay_orders_lock = threading.Lock()
+pending_funpay_input_selections = {}
 playerok_orders_lock = threading.RLock()
 playerok_monitor = None
 
@@ -733,8 +735,8 @@ def send_funpay_chat_message(node_id, text):
         logging.exception("Ошибка отправки сообщения в FunPay, node=%s", node_id)
         return False, f"Ошибка отправки: {e}"
 
-from order_parser import detect_order_sets_and_quantity, is_paid_order_notification
-from funpay_orders import (compact_funpay_text, decode_text_attachment, extract_last_customer_message_fragment, extract_steam_trade_url, extract_text_attachment_href, filter_reserved_assets, find_open_order_for_chat, funpay_cold_start_blockers, inventory_cache_freshness_error, is_funpay_system_message, mark_input_received, register_payment, message_signature, restore_reserved_assets, voucher_redemption_block_reason, voucher_reset_block_reason)
+from order_parser import detect_order_sets_and_quantity, is_funpay_refund_notification, is_paid_order_notification
+from funpay_orders import (compact_funpay_text, decode_text_attachment, download_text_attachment, extract_last_customer_message_fragment, extract_order_number, extract_steam_trade_url, extract_text_attachment_href, filter_reserved_assets, find_open_order_for_chat, funpay_cold_start_blockers, funpay_input_signature, inventory_cache_freshness_error, is_funpay_system_message, mark_input_received, open_orders_for_chat, register_payment, message_signature, restore_reserved_assets, voucher_redemption_block_reason, voucher_reset_block_reason)
 from sales_analytics import summarize_sales
 from playerok_orders import (
     active_orders_for_chat,
@@ -868,9 +870,21 @@ def reserve_funpay_order(record, ledger_data=None):
 
 
 def register_funpay_payment(node_id, buyer, text, sets_per_item, quantity):
-    """Create an idempotent order record and recover an interrupted first reservation."""
+    """Create an idempotent paid order unless FunPay has already refunded it."""
+    order_number = extract_order_number(text)
     with funpay_orders_lock:
         data = load_funpay_orders()
+        refunds = data.get("refunds")
+        if not isinstance(refunds, dict):
+            refunds = {}
+            data["refunds"] = refunds
+        if order_number and str(order_number).upper() in refunds:
+            logging.info(
+                "Ignoring replayed paid event for already-refunded FunPay order %s.",
+                str(order_number).upper(),
+            )
+            return None, False
+
         record, created = register_payment(
             data["orders"], node_id=str(node_id), buyer=buyer, text=text,
             sets_per_item=sets_per_item, quantity=quantity,
@@ -880,14 +894,89 @@ def register_funpay_payment(node_id, buyer, text, sets_per_item, quantity):
         save_json(FP_ORDERS_FILE, data)
         # A crash may occur after the initial ledger write but before reservation.
         # Repeated payment notifications can safely resume only this untouched state.
-        # Orders already put in review after a stock/cache error are not retried automatically.
         if record.get("status") == "awaiting_input" and not record.get("reservation"):
             reserve_funpay_order(record, data)
             save_json(FP_ORDERS_FILE, data)
         return record, created
 
 
-def record_funpay_buyer_input(node_id, trade_url, input_kind):
+def register_funpay_refund(node_id, text):
+    """Apply a verified FunPay refund by exact order ID and safely restore unused stock."""
+    order_number = extract_order_number(text)
+    if not order_number:
+        return "unmatched", None
+
+    order_number = str(order_number).upper()
+    with funpay_orders_lock:
+        data = load_funpay_orders()
+        refunds = data.get("refunds")
+        if not isinstance(refunds, dict):
+            refunds = {}
+            data["refunds"] = refunds
+        refund_key = f"fp-order-{order_number}"
+        record = data["orders"].get(refund_key)
+
+        if order_number in refunds:
+            return "duplicate", record if isinstance(record, dict) else None
+
+        if record and (record.get("funpay_refunded") or record.get("status") == "refunded"):
+            refunds[order_number] = {
+                "node_id": str(node_id),
+                "refunded_at": int(time.time()),
+            }
+            save_json(FP_ORDERS_FILE, data)
+            return "duplicate", record
+
+        now = int(time.time())
+        refunds[order_number] = {
+            "node_id": str(node_id),
+            "refunded_at": now,
+        }
+        if not isinstance(record, dict):
+            save_json(FP_ORDERS_FILE, data)
+            return "unmatched", None
+
+        record["funpay_refunded"] = True
+        record["refund_notification_at"] = now
+        record["updated_at"] = now
+
+        # Once a Steam offer exists, or a request was interrupted/uncertain, the
+        # cards may already have left the account. Keep the reservation and require
+        # manual reconciliation instead of restoring potentially delivered assets.
+        unsafe_statuses = {
+            "sending", "delivery_uncertain", "offer_sent",
+            "offer_pending_confirmation", "completed",
+        }
+        if record.get("steam_trade_offer_id") or record.get("status") in unsafe_statuses:
+            record["status"] = "refund_review"
+            record.setdefault("notes", []).append(
+                "FunPay сообщил о возврате после начала/создания Steam-предложения. "
+                "Резерв сохранён; требуется ручная сверка Steam и FunPay."
+            )
+            save_json(FP_ORDERS_FILE, data)
+            return "manual_review", record
+
+        reservation = record.get("reservation")
+        if isinstance(reservation, dict):
+            if not restore_reservation_to_cache(reservation):
+                record["status"] = "refund_review"
+                record.setdefault("notes", []).append(
+                    "FunPay сообщил о возврате, но резерв не удалось безопасно вернуть в кэш. "
+                    "Резерв сохранён для ручной проверки."
+                )
+                save_json(FP_ORDERS_FILE, data)
+                return "manual_review", record
+            record["reservation"] = None
+
+        record["status"] = "refunded"
+        record.setdefault("notes", []).append(
+            "Получено системное уведомление FunPay о возврате; резерв безопасно снят."
+        )
+        save_json(FP_ORDERS_FILE, data)
+        return "refunded", record
+
+
+def record_funpay_buyer_input(node_id, trade_url, input_kind, selected_order_key=None):
     """Safely bind a validated Steam URL to exactly one paid FunPay order and send once."""
     normalized_url = extract_steam_trade_url(trade_url)
     if not normalized_url:
@@ -899,25 +988,21 @@ def record_funpay_buyer_input(node_id, trade_url, input_kind):
 
     with funpay_orders_lock:
         data = load_funpay_orders()
-        record = find_open_order_for_chat(data["orders"], node_id)
+        if selected_order_key is not None:
+            record = data["orders"].get(str(selected_order_key))
+            if not isinstance(record, dict) or str(record.get("node_id")) != str(node_id):
+                return None, "unmatched", "Выбранный заказ больше не привязан к этому чату."
+            if record.get("status") not in {
+                "awaiting_input", "input_received", "reserved", "review",
+                "retry_required", "sending", "delivery_uncertain", "refund_review",
+            }:
+                return record, "duplicate", "Выбранный заказ уже закрыт."
+        else:
+            record = find_open_order_for_chat(data["orders"], node_id)
         if not record:
-            candidates = [
-                item for item in data["orders"].values()
-                if isinstance(item, dict)
-                and str(item.get("node_id")) == str(node_id)
-                and item.get("status") in {"sending", "delivery_uncertain", "awaiting_input", "input_received", "reserved", "review", "retry_required"}
-            ]
-            if not candidates:
-                logging.warning(
-                    "FunPay trade URL has no matching paid order: node=%s; total_orders=%s; open_statuses=%s",
-                    node_id,
-                    len(data["orders"]),
-                    sorted({
-                        str(item.get("status"))
-                        for item in data["orders"].values()
-                        if isinstance(item, dict)
-                    }),
-                )
+            if selected_order_key is not None:
+                return None, "unmatched", "Выбранный заказ больше не доступен."
+            candidates = open_orders_for_chat(data["orders"], node_id)
             if len(candidates) > 1:
                 logging.warning(
                     "FunPay trade URL is ambiguous: node=%s; candidate_orders=%s",
@@ -928,11 +1013,20 @@ def record_funpay_buyer_input(node_id, trade_url, input_kind):
                     ],
                 )
                 return None, "ambiguous", "В этом чате несколько активных заказов."
-            if len(candidates) == 1 and candidates[0].get("status") == "sending":
-                return candidates[0], "in_progress", "Заказ уже обрабатывается; повторная отправка не выполняется."
-            if len(candidates) == 1 and candidates[0].get("status") == "delivery_uncertain":
-                return candidates[0], "uncertain", "Результат предыдущей попытки неизвестен; повторная отправка заблокирована."
+            logging.warning(
+                "FunPay trade URL has no matching paid order: node=%s; total_orders=%s; statuses=%s",
+                node_id,
+                len(data["orders"]),
+                sorted({
+                    str(item.get("status"))
+                    for item in data["orders"].values()
+                    if isinstance(item, dict)
+                }),
+            )
             return None, "unmatched", "Не найден единственный подходящий оплаченный заказ."
+
+        if record.get("funpay_refunded") or record.get("status") in {"refunded", "refund_review"}:
+            return record, "refunded", "Заказ возвращён или требует ручной проверки после возврата; Steam-отправка заблокирована."
 
         if record.get("steam_trade_offer_id") or record.get("status") in {
             "offer_sent", "offer_pending_confirmation", "completed", "cancelled"
@@ -1025,6 +1119,125 @@ def apply_reserved_assets_to_cache(cache_data, orders=None, vouchers=None):
     return filter_reserved_assets(cache_data, orders, vouchers)
 
 
+def _queue_funpay_order_selection(admin_id, node_id, sender_name, trade_url, input_kind, candidates):
+    """Keep a trade URL in memory only while an admin explicitly selects its order."""
+    now = time.time()
+    for token, pending in list(pending_funpay_input_selections.items()):
+        if now - float(pending.get("created_at", 0) or 0) > 600:
+            pending_funpay_input_selections.pop(token, None)
+
+    if not candidates or len(candidates) > 8:
+        bot.send_message(
+            admin_id,
+            f"⚠️ В чате FunPay #{node_id} несколько активных/неразрешённых операций. "
+            "Автовыдача остановлена. Сначала сверь последние заказы и Steam-предложения вручную."
+        )
+        return
+
+    blocking = [
+        order for order in candidates
+        if order.get("status") in {"sending", "delivery_uncertain", "refund_review"}
+        or order.get("funpay_refunded")
+    ]
+    if blocking:
+        bot.send_message(
+            admin_id,
+            f"⚠️ В чате FunPay #{node_id} есть отправка с неопределённым результатом "
+            "или возврат. Автоматический выбор заказа запрещён; сначала проверь Steam/FunPay."
+        )
+        return
+
+    token = uuid.uuid4().hex[:12]
+    pending_funpay_input_selections[token] = {
+        "admin_id": int(admin_id),
+        "node_id": str(node_id),
+        "sender_name": str(sender_name),
+        "trade_url": trade_url,
+        "input_kind": input_kind,
+        "order_keys": [str(order.get("key")) for order in candidates],
+        "created_at": now,
+    }
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    for index, order in enumerate(candidates):
+        order_no = order.get("funpay_order_number") or order.get("key") or "без номера"
+        sets_total = int(order.get("sets_total", 0) or 0)
+        label = f"Заказ #{order_no} · {sets_total} сет."
+        markup.add(
+            types.InlineKeyboardButton(
+                label[:60],
+                callback_data=f"fporderselect:{token}:{index}",
+            )
+        )
+    bot.send_message(
+        admin_id,
+        f"⚠️ В чате FunPay #{node_id} найдено несколько оплаченных заказов.\n"
+        "Выбери заказ, к которому относится последняя trade-ссылка. "
+        "Ссылка хранится только в памяти бота до 10 минут и не записывается в журнал.",
+        reply_markup=markup,
+    )
+
+
+def _report_funpay_input_result(admin_id, node_id, input_record, input_result, detail, input_kind):
+    order_label = (
+        (input_record.get("funpay_order_number") or input_record.get("key"))
+        if input_record else f"чат #{node_id}"
+    )
+    if input_result == "offer_sent":
+        bot.send_message(
+            admin_id,
+            f"✅ FunPay: Steam-предложение создано. Заказ: {order_label}. "
+            f"Предложение Steam #{input_record.get('steam_trade_offer_id')}. "
+            f"Источник: {input_kind}. Наборы: {input_record.get('sets_total')}."
+        )
+    elif input_result == "offer_pending_confirmation":
+        bot.send_message(
+            admin_id,
+            f"⚠️ FunPay: предложение Steam #{input_record.get('steam_trade_offer_id')} создано "
+            f"для заказа {order_label}, но ASF не подтвердил автоматическое подтверждение. "
+            "Не отправляю повторно; проверь подтверждения ASF/Steam вручную."
+        )
+    elif input_result == "delivery_uncertain":
+        bot.send_message(
+            admin_id,
+            f"🚨 FunPay: неопределённый результат Steam для заказа {order_label}. "
+            "Повторная отправка заблокирована во избежание дубля. Проверь историю предложений Steam вручную."
+        )
+    elif input_result == "retry_required":
+        bot.send_message(
+            admin_id,
+            f"⚠️ FunPay: Steam не создал предложение для заказа {order_label}. "
+            f"Резерв сохранён. Причина: {detail} Пришли новую корректную ссылку после проверки."
+        )
+    elif input_result == "no_stock":
+        bot.send_message(
+            admin_id,
+            f"🚨 FunPay: недостаточно доступных карточек для заказа {order_label}. "
+            f"Автообмен не выполнялся. {detail}"
+        )
+    elif input_result == "ambiguous":
+        bot.send_message(
+            admin_id,
+            f"⚠️ Для чата FunPay #{node_id} осталось несколько активных заказов. "
+            "Без нового подтверждённого выбора отправка остановлена."
+        )
+    elif input_result == "unmatched":
+        bot.send_message(
+            admin_id,
+            f"⚠️ В чате FunPay #{node_id} получена trade-ссылка, но не найден "
+            "единственный оплаченный заказ. Автоматическая выдача остановлена; нужна ручная проверка."
+        )
+    elif input_result == "refunded":
+        bot.send_message(admin_id, f"🚫 FunPay: {order_label}: {detail} Steam-отправка заблокирована.")
+    elif input_result == "uncertain":
+        bot.send_message(admin_id, f"🚨 FunPay: {order_label}: {detail}")
+    elif input_result == "disabled":
+        bot.send_message(admin_id, f"⚠️ FunPay: вход получен, но автовыдача отключена: {detail}")
+    elif input_result == "invalid_url":
+        bot.send_message(admin_id, f"⚠️ FunPay: ссылка не прошла проверку: {detail}")
+    elif input_result in {"in_progress", "duplicate"}:
+        return
+
+
 def funpay_check_unread_chats():
     db = load_json(DB_FILE, {"admin_id": None, "vouchers": {}})
     admin_id = db.get("admin_id")
@@ -1038,6 +1251,8 @@ def funpay_check_unread_chats():
     seen_msgs_value = cfg.get("seen_msgs", {})
     seen_msgs = seen_msgs_value if isinstance(seen_msgs_value, dict) else {}
     first_run = "seen_msgs" not in cfg or not isinstance(seen_msgs_value, dict)
+    seen_inputs_value = cfg.get("seen_input_events", {})
+    seen_input_events = seen_inputs_value if isinstance(seen_inputs_value, dict) else {}
 
     try:
         r = s.get("https://funpay.com/chat/", timeout=15)
@@ -1143,8 +1358,7 @@ def funpay_check_unread_chats():
                 logging.warning("Детали чата FunPay #node%s пока недоступны; повторим проверку.", node_id)
                 continue
 
-            # Replay trusted system-authored payment confirmations independently
-            # of the last buyer message, so a later refund notice cannot hide them.
+            # Replay trusted payment and refund events in chronological chat order.
             try:
                 payment_events = extract_paid_order_events(detail_html)
             except Exception:
@@ -1152,6 +1366,30 @@ def funpay_check_unread_chats():
                 logging.exception("Не удалось извлечь историю системных уведомлений FunPay #node%s", node_id)
 
             for payment_fragment, payment_text in payment_events:
+                if is_funpay_refund_notification(payment_text):
+                    refund_state, refund_record = register_funpay_refund(node_id, payment_text)
+                    refund_order = extract_order_number(payment_text) or "без номера"
+                    if refund_state == "refunded":
+                        bot.send_message(
+                            admin_id,
+                            f"↩️ FunPay подтвердил возврат заказа #{refund_order}. "
+                            "Незавершённый резерв возвращён в склад; Steam-предложение не создавалось."
+                        )
+                    elif refund_state == "manual_review":
+                        bot.send_message(
+                            admin_id,
+                            f"🚨 Возврат FunPay по заказу #{refund_order}, но в журнале есть "
+                            "отправка/Steam-предложение или не удалось безопасно вернуть резерв. "
+                            "Карточки не возвращены в доступный склад автоматически; нужна ручная сверка."
+                        )
+                    elif refund_state == "unmatched":
+                        bot.send_message(
+                            admin_id,
+                            f"⚠️ FunPay сообщил о возврате заказа #{refund_order}, которого нет в журнале бота. "
+                            "Событие сохранено: позднее уведомление об оплате этого заказа не создаст выдачу."
+                        )
+                    continue
+
                 if not is_paid_order_notification(payment_text):
                     continue
                 event_sets, event_quantity = detect_order_sets_and_quantity(payment_text)
@@ -1165,9 +1403,12 @@ def funpay_check_unread_chats():
                 record, created = register_funpay_payment(
                     node_id, sender_name, payment_text, event_sets, event_quantity
                 )
+                if record is None:
+                    # A later refund was already recorded for this exact order ID.
+                    continue
                 order_no = record.get("funpay_order_number") or record.get("key") or "без номера"
                 logging.info(
-                    "FunPay payment event matched: order=%s node=%s sets=%s created=%s status=%s",
+                    "FunPay payment event reconciled: order=%s node=%s sets=%s created=%s status=%s",
                     order_no,
                     node_id,
                     record.get("sets_total"),
@@ -1177,149 +1418,130 @@ def funpay_check_unread_chats():
                 if created:
                     bot.send_message(
                         admin_id,
-                        f"⚠️ Оплачен заказ FunPay.\\n"
-                        f"Заказ: {order_no}\\n"
-                        f"Покупатель: {sender_name}\\n"
-                        f"Лот: {event_sets} сет. × {event_quantity} шт.\\n"
-                        f"Резерв: {record.get('status')}.\\n"
-                        "Ожидается Steam trade-ссылка обычным текстовым сообщением в чате FunPay."
+                        f"💳 Оплачен заказ FunPay.\n"
+                        f"Заказ: {order_no}\n"
+                        f"Покупатель: {sender_name}\n"
+                        f"Лот: {event_sets} сет. × {event_quantity} шт.\n"
+                        f"Резерв: {record.get('status')}.\n"
+                        "Ожидается trade-ссылка или текстовый файл с одной Steam trade-ссылкой."
                     )
 
-            if not last_message_html or not full_text.strip():
-                # A system-only event (including a refund) is acknowledged after
-                # payment alerts have been replayed; it is not a customer input/file.
+            chat_page_url = f"https://funpay.com/chat/?node={node_id}"
+            attachment_href = (
+                extract_text_attachment_href(last_message_html, chat_page_url)
+                if last_message_html else None
+            )
+            has_file = bool(
+                attachment_href
+                or (
+                    last_message_html and re.search(
+                        r"(?:chat-msg-(?:file|attachment)|data-type=['\"]attachment['\"])",
+                        last_message_html, re.IGNORECASE
+                    )
+                )
+                or re.search(r"\b(?:файл|вложение|attachment)\b", msg_preview, re.IGNORECASE)
+            )
+
+            if not last_message_html or (not full_text.strip() and not attachment_href and not has_file):
+                # A latest system alert is not buyer input. Cancel any stale in-memory
+                # order-selection prompt for this chat; an older URL must not survive a refund.
+                for token, pending in list(pending_funpay_input_selections.items()):
+                    if str(pending.get("node_id")) == str(node_id):
+                        pending_funpay_input_selections.pop(token, None)
+                seen_msgs[node_id] = sig
+                changed = True
+                first_run = False
+                continue
+
+            input_signature = funpay_input_signature(
+                node_id, sender_name, last_message_html, full_text
+            )
+            if seen_input_events.get(node_id) == input_signature:
                 seen_msgs[node_id] = sig
                 changed = True
                 first_run = False
                 continue
 
             lower_txt = full_text.lower()
-            is_order_payment = (
-                is_funpay_system_message(last_message_html)
-                and is_paid_order_notification(full_text)
-            )
-            sets_per_item, order_quantity = detect_order_sets_and_quantity(full_text)
-            mentions_product = any(term in lower_txt for term in
-                                    ("карт", "сет", "level", "уровень", "steam", "карточ"))
-
-            chat_page_url = f"https://funpay.com/chat/?node={node_id}"
             trade_url = extract_steam_trade_url(full_text)
             contains_trade_url = "steamcommunity.com/tradeoffer/new" in lower_txt
-            attachment_href = extract_text_attachment_href(last_message_html, chat_page_url)
-            has_file = bool(attachment_href or re.search(
-                r"(?:chat-msg-(?:file|attachment)|data-type=['\"]attachment['\"])",
-                last_message_html, re.IGNORECASE
-            ) or re.search(r"\b(?:файл|вложение|attachment)\b", msg_preview, re.IGNORECASE))
-            is_buyer_input = bool(trade_url or contains_trade_url or attachment_href or has_file)
+            input_kind = "chat_trade_url"
+            input_error = None
 
-            # Buyer-provided links/files take precedence over payment wording.
-            # "I paid, here's my link" must be processed as input, not a new order.
-            if is_order_payment and not is_buyer_input and mentions_product and sets_per_item in (1, 5):
-                record, created = register_funpay_payment(
-                    node_id, sender_name, full_text, sets_per_item, order_quantity
+            # FunPay file-exchange supports a small text file. Only download one
+            # unambiguous FunPay-hosted attachment; never accept external redirects.
+            if not trade_url and attachment_href:
+                try:
+                    attachment_text = download_text_attachment(
+                        s, attachment_href, max_bytes=MAX_FUNPAY_TEXT_ATTACHMENT_BYTES
+                    )
+                    trade_url = extract_steam_trade_url(attachment_text)
+                    if trade_url:
+                        input_kind = "text_attachment"
+                    else:
+                        input_error = (
+                            "В текстовом файле должна быть ровно одна корректная Steam trade-ссылка "
+                            "с параметрами partner и token."
+                        )
+                except (ValueError, requests.RequestException) as exc:
+                    input_error = f"Не удалось безопасно прочитать текстовый файл: {str(exc)[:180]}"
+                except Exception as exc:
+                    logging.warning(
+                        "FunPay text attachment failed for chat %s: %s",
+                        node_id,
+                        type(exc).__name__,
+                    )
+                    input_error = "Не удалось безопасно прочитать текстовый файл. Отправь ссылку обычным сообщением."
+
+            if not trade_url and not input_error and contains_trade_url:
+                input_error = "В сообщении есть похожая на Steam trade-ссылку строка, но формат ссылки некорректен."
+            elif not trade_url and not input_error and has_file:
+                input_error = (
+                    "Вложение не распознано как текстовый файл FunPay. "
+                    "Прикрепи небольшой .txt/.csv/.log с одной Steam trade-ссылкой."
                 )
-                if created:
-                    order_no = record.get("funpay_order_number") or "не найден в тексте"
-                    bot.send_message(
-                        admin_id,
-                        f"⚠️ Оплачен заказ FunPay.\n"
-                        f"Заказ: {order_no}\n"
-                        f"Покупатель: {sender_name}\n"
-                        f"Лот: {sets_per_item} сет. × {order_quantity} шт.\n"
-                        f"Резерв: {record.get('status')}.\n"
-                        f"Ожидается Steam trade-ссылка обычным текстовым сообщением в чате FunPay."
-                    )
-            else:
-                input_kind = "chat_trade_url"
-                input_error = None
-                # This product accepts the trade URL only as ordinary text in the
-                # FunPay chat. Do not download or validate attachments as files.
-                if trade_url:
-                    pass
-                elif contains_trade_url:
-                    input_error = "В сообщении есть похожая на Steam trade-ссылку строка, но формат ссылки некорректен."
-                elif has_file:
-                    # A file attachment is not an accepted input path; make this
-                    # clear without treating it as a failed text URL download.
-                    input_error = "Отправь Steam trade-ссылку обычным текстовым сообщением прямо в чате FunPay. Файлы не поддерживаются."
 
-                if trade_url:
-                    input_record, input_result, detail = record_funpay_buyer_input(
-                        node_id, trade_url, input_kind
-                    )
-                    order_label = (
-                        (input_record.get("funpay_order_number") or input_record.get("key"))
-                        if input_record else f"чат #{node_id}"
-                    )
-                    if input_result == "offer_sent":
-                        bot.send_message(
-                            admin_id,
-                            f"✅ FunPay: Steam-предложение создано. Заказ: {order_label}. "
-                            f"Предложение Steam #{input_record.get('steam_trade_offer_id')}. "
-                            f"Источник ссылки: {input_kind}. Наборы: {input_record.get('sets_total')}."
-                        )
-                    elif input_result == "offer_pending_confirmation":
-                        bot.send_message(
-                            admin_id,
-                            f"⚠️ FunPay: предложение Steam #{input_record.get('steam_trade_offer_id')} создано "
-                            f"для заказа {order_label}, но ASF не подтвердил автоматическое подтверждение. "
-                            "Не отправляю повторно; проверь подтверждения ASF/Steam вручную."
-                        )
-                    elif input_result == "delivery_uncertain":
-                        bot.send_message(
-                            admin_id,
-                            f"🚨 FunPay: неопределённый результат Steam для заказа {order_label}. "
-                            "Повторная отправка заблокирована во избежание дубля. Проверь историю предложений Steam вручную."
-                        )
-                    elif input_result == "retry_required":
-                        bot.send_message(
-                            admin_id,
-                            f"⚠️ FunPay: Steam не создал предложение для заказа {order_label}. "
-                            f"Резерв сохранён. Причина: {detail} Отправь новую корректную ссылку/файл после проверки."
-                        )
-                    elif input_result == "no_stock":
-                        bot.send_message(
-                            admin_id,
-                            f"🚨 FunPay: недостаточно доступных карточек для заказа {order_label}. "
-                            f"Автообмен не выполнялся. {detail}"
-                        )
-                    elif input_result in {"ambiguous", "unmatched"}:
-                        issue = "несколько активных заказов в чате" if input_result == "ambiguous" else "не найден подходящий оплаченный заказ"
-                        bot.send_message(
-                            admin_id,
-                            f"⚠️ В чате FunPay #{node_id} получена trade-ссылка, но {issue}. "
-                            "Автоматическая выдача остановлена; нужна ручная проверка."
-                        )
-                    elif input_result in {"in_progress", "duplicate"}:
-                        pass
-                    elif input_result == "uncertain":
-                        bot.send_message(admin_id, f"🚨 FunPay: {order_label}: {detail}")
-                    elif input_result == "disabled":
-                        bot.send_message(admin_id, f"⚠️ FunPay: вход получен, но автовыдача отключена настройкой: {detail}")
-                    elif input_result == "invalid_url":
-                        bot.send_message(admin_id, f"⚠️ FunPay: ссылка из чата #{node_id} не прошла проверку: {detail}")
-                elif input_error:
-                    bot.send_message(
-                        admin_id,
-                        f"⚠️ Не удалось обработать вход FunPay в чате #{node_id}: {input_error} "
-                        "Карточки автоматически не отправлялись."
+            if trade_url:
+                input_record, input_result, detail = record_funpay_buyer_input(
+                    node_id, trade_url, input_kind
+                )
+                if input_result == "ambiguous":
+                    candidates = open_orders_for_chat(load_funpay_orders().get("orders", {}), node_id)
+                    _queue_funpay_order_selection(
+                        admin_id, node_id, sender_name, trade_url, input_kind, candidates
                     )
                 else:
-                    markup = types.InlineKeyboardMarkup()
-                    markup.add(types.InlineKeyboardButton("✍️ Ответить покупателю", callback_data=f"fpreply_{node_id}"))
-                    safe_text = re.sub(
-                        r"https?://steamcommunity\.com/tradeoffer/new/\?[^\s<]+",
-                        "[трейд-ссылка скрыта]", full_text, flags=re.IGNORECASE
+                    _report_funpay_input_result(
+                        admin_id, node_id, input_record, input_result, detail, input_kind
                     )
-                    safe_text = compact_funpay_text(safe_text, max_chars=900)
-                    bot.send_message(
-                        admin_id,
-                        f"💬 Новое сообщение на FunPay\n"
-                        f"От: {sender_name} (чат #node{node_id})\n\n"
-                        f"Сообщение: {safe_text}\n\n"
-                        "Нажми Reply на это сообщение или кнопку ниже.",
-                        reply_markup=markup
-                    )
+            elif input_error:
+                bot.send_message(
+                    admin_id,
+                    f"⚠️ Не удалось обработать вход FunPay в чате #{node_id}: {input_error} "
+                    "Карточки автоматически не отправлялись."
+                )
+            else:
+                markup = types.InlineKeyboardMarkup()
+                markup.add(types.InlineKeyboardButton("✍️ Ответить покупателю", callback_data=f"fpreply_{node_id}"))
+                safe_text = re.sub(
+                    r"https?://steamcommunity\.com/tradeoffer/new/\?[^\s<]+",
+                    "[трейд-ссылка скрыта]", full_text, flags=re.IGNORECASE
+                )
+                safe_text = compact_funpay_text(safe_text, max_chars=900)
+                bot.send_message(
+                    admin_id,
+                    f"💬 Новое сообщение на FunPay\n"
+                    f"От: {sender_name} (чат #node{node_id})\n\n"
+                    f"Сообщение: {safe_text}\n\n"
+                    "Нажми Reply на это сообщение или кнопку ниже.",
+                    reply_markup=markup
+                )
+
+            # Save only the one-way fingerprint, never the trade URL or text content.
+            seen_input_events[node_id] = input_signature
+            seen_msgs[node_id] = sig
+            changed = True
+            first_run = False
 
             # Signature is persisted only after successful processing/notification.
             seen_msgs[node_id] = sig
@@ -1328,9 +1550,88 @@ def funpay_check_unread_chats():
 
         if changed or first_run:
             cfg["seen_msgs"] = seen_msgs
+            cfg["seen_input_events"] = seen_input_events
             save_json(FP_CONFIG_FILE, cfg)
     except Exception:
         logging.exception("Ошибка проверки непрочитанных чатов FunPay")
+@bot.callback_query_handler(func=lambda call: bool(call.data) and call.data.startswith("fporderselect:"))
+def handle_funpay_order_selection(call):
+    """Deliver only after the admin selects one exact active order from the same chat."""
+    db = load_json(DB_FILE, {"admin_id": None, "vouchers": {}})
+    admin_id = db.get("admin_id")
+    if (
+        not admin_id
+        or not call.from_user
+        or call.from_user.id != admin_id
+        or not call.message
+        or call.message.chat.id != admin_id
+        or call.message.chat.type != "private"
+    ):
+        bot.answer_callback_query(call.id, "Нет доступа.")
+        return
+
+    parts = (call.data or "").split(":")
+    if len(parts) != 3:
+        bot.answer_callback_query(call.id, "Некорректный выбор.")
+        return
+    token = parts[1]
+    try:
+        index = int(parts[2])
+    except ValueError:
+        bot.answer_callback_query(call.id, "Некорректный выбор.")
+        return
+
+    pending = pending_funpay_input_selections.get(token)
+    if not isinstance(pending, dict):
+        bot.answer_callback_query(call.id, "Выбор истёк. Попроси покупателя отправить ссылку ещё раз.")
+        return
+    if (
+        int(pending.get("admin_id", 0) or 0) != int(admin_id)
+        or time.time() - float(pending.get("created_at", 0) or 0) > 600
+    ):
+        pending_funpay_input_selections.pop(token, None)
+        bot.answer_callback_query(call.id, "Выбор истёк.")
+        return
+
+    order_keys = pending.get("order_keys", [])
+    if not isinstance(order_keys, list) or index < 0 or index >= len(order_keys):
+        bot.answer_callback_query(call.id, "Заказ не найден.")
+        return
+
+    # Pop before the network request: Telegram callback retries cannot send twice.
+    pending_funpay_input_selections.pop(token, None)
+    selected_order_key = str(order_keys[index])
+    node_id = str(pending.get("node_id"))
+    trade_url = pending.get("trade_url")
+    input_kind = str(pending.get("input_kind") or "chat_trade_url")
+    if not isinstance(trade_url, str) or not extract_steam_trade_url(trade_url):
+        bot.answer_callback_query(call.id, "Ссылка больше недоступна. Попроси покупателя прислать её снова.")
+        return
+
+    bot.answer_callback_query(call.id, "Заказ выбран. Проверяю статус и резерв.")
+    try:
+        input_record, input_result, detail = record_funpay_buyer_input(
+            node_id,
+            trade_url,
+            input_kind,
+            selected_order_key=selected_order_key,
+        )
+        _report_funpay_input_result(
+            admin_id, node_id, input_record, input_result, detail, input_kind
+        )
+    except Exception:
+        logging.exception(
+            "FunPay selected-order delivery failed: node=%s order=%s",
+            node_id,
+            selected_order_key,
+        )
+        bot.send_message(
+            admin_id,
+            f"🚨 Не удалось обработать выбранный заказ {selected_order_key}. "
+            "Ссылка не записана в журнал; проверь статус сделки и историю Steam вручную."
+        )
+
+
 def funpay_background_worker():
     # The owner explicitly approved this custom chat-based fulfillment workflow.
     # It does not activate FunPay's built-in "Automatic delivery" field or send external links.
@@ -2987,7 +3288,9 @@ if _instance_mutex is None:
 try:
     threading.Thread(target=funpay_background_worker, daemon=True).start()
     start_playerok_monitor()
-    bot.infinity_polling()
+    # Long-poll timeout is shorter than the HTTP read timeout so transient socket resets
+    # are treated as retriable transport errors by pyTelegramBotAPI's infinity loop.
+    bot.infinity_polling(timeout=25, request_timeout=45, skip_pending=False)
     if restart_requested:
         raise SystemExit(43 if update_restart_requested else 42)
 finally:

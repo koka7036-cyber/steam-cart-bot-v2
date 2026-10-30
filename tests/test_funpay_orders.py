@@ -1,6 +1,6 @@
 """Regression tests for safe FunPay order matching."""
-from funpay_orders import (decode_text_attachment, extract_last_chat_message_fragment, extract_steam_trade_url, extract_text_attachment_href, filter_reserved_assets, find_open_order_for_chat, funpay_cold_start_blockers, funpay_input_signature, inventory_cache_freshness_error, is_funpay_system_message, mark_input_received, register_payment, voucher_redemption_block_reason, voucher_reset_block_reason)
-from order_parser import detect_order_sets_and_quantity, is_paid_order_notification
+from funpay_orders import (decode_text_attachment, download_text_attachment, extract_chat_message_fragments, extract_last_chat_message_fragment, extract_last_customer_message_fragment, extract_steam_trade_url, extract_text_attachment_href, filter_reserved_assets, find_open_order_for_chat, funpay_cold_start_blockers, funpay_input_signature, inventory_cache_freshness_error, is_funpay_system_message, mark_input_received, register_payment, voucher_redemption_block_reason, voucher_reset_block_reason)
+from order_parser import detect_order_sets_and_quantity, is_funpay_refund_notification, is_paid_order_notification
 
 
 def make_order(key, node_id="123", status="awaiting_input", updated_at=1):
@@ -540,25 +540,53 @@ def test_is_funpay_system_message_accepts_alert_classes_in_any_order():
 
 
 
-def test_extract_last_customer_message_ignores_system_refund_notification():
-    from funpay_orders import extract_last_customer_message_fragment
-
+def test_extract_last_customer_message_does_not_reuse_old_trade_after_refund_alert():
     trade = (
         '<div class="chat-msg-item"><div class="chat-msg-text">'
         'https://steamcommunity.com/tradeoffer/new/?partner=123&token=abc'
         '</div></div>'
     )
     refund = (
-        '<div class="chat-msg-item"><div role="alert" class="alert alert-info">'
+        '<div role="alert" class="alert alert-info">'
         'Продавец Koka2010 вернул деньги покупателю Koka20111 по заказу #LB9EF7W7.'
+        '</div>'
+    )
+    html_doc = trade + refund
+
+    # The newest timeline entry is the system refund, so there is no new buyer input.
+    assert extract_last_customer_message_fragment(html_doc) is None
+    assert "вернул деньги" in extract_last_chat_message_fragment(html_doc)
+    # The historical URL remains in history but is not selected for delivery.
+    assert extract_steam_trade_url(extract_last_customer_message_fragment(html_doc) or "") is None
+
+
+def test_chat_timeline_preserves_order_of_buyer_message_and_standalone_alert():
+    trade = (
+        '<div class="chat-msg-item"><div class="chat-msg-text">'
+        'https://steamcommunity.com/tradeoffer/new/?partner=123&token=abc'
         '</div></div>'
     )
-    result = extract_last_customer_message_fragment(trade + refund)
-
-    assert result == trade
-    assert extract_steam_trade_url(result) == (
-        "https://steamcommunity.com/tradeoffer/new/?partner=123&token=abc"
+    refund = (
+        '<div role="alert" class="alert alert-info">'
+        'Продавец Koka2010 вернул деньги покупателю Koka20111 по заказу #LB9EF7W7.'
+        '</div>'
     )
+    fragments = extract_chat_message_fragments(trade + refund)
+
+    assert len(fragments) == 2
+    assert "token=abc" in fragments[0]
+    assert "вернул деньги" in fragments[1]
+
+
+def test_funpay_refund_notification_is_recognized_but_not_as_payment():
+    from order_parser import is_funpay_refund_notification
+
+    refund = "Продавец Koka2010 вернул деньги покупателю Koka20111 по заказу #LB9EF7W7."
+    payment = "Покупатель Koka20111 оплатил заказ #S8QXD5R4: 1 полный сет карточек Steam"
+    assert is_funpay_refund_notification(refund)
+    assert not is_funpay_refund_notification(payment)
+    assert not is_paid_order_notification(refund)
+
 
 
 def test_compact_funpay_text_collapses_blank_layout_and_truncates():
@@ -656,4 +684,146 @@ def test_system_refund_only_chat_has_no_customer_message():
         '</div></div>'
     )
     assert extract_last_customer_message_fragment(refund) is None
+
+
+
+def test_download_text_attachment_accepts_funpay_text_and_preserves_trade_url():
+    from funpay_orders import download_text_attachment
+
+    url = "https://steamcommunity.com/tradeoffer/new/?partner=123456&token=AbCdEf12"
+
+    class Response:
+        url = "https://funpay.com/file/12345"
+        headers = {"Content-Type": "text/plain; charset=utf-8", "Content-Length": "100"}
+
+        def raise_for_status(self):
+            pass
+
+        def iter_content(self, chunk_size):
+            assert chunk_size == 8192
+            yield ("Trade URL: " + url).encode("utf-8")
+
+        def close(self):
+            self.closed = True
+
+    class Session:
+        def get(self, request_url, timeout, stream):
+            assert request_url == "https://funpay.com/file/12345"
+            assert timeout == 10 and stream is True
+            return Response()
+
+    text = download_text_attachment(Session(), "https://funpay.com/file/12345")
+    assert extract_steam_trade_url(text) == url
+
+
+def test_download_text_attachment_rejects_redirect_to_external_host():
+    import pytest
+    from funpay_orders import download_text_attachment
+
+    class Response:
+        url = "https://example.com/steal.txt"
+        headers = {"Content-Type": "text/plain"}
+
+        def raise_for_status(self):
+            pass
+
+        def close(self):
+            pass
+
+    class Session:
+        def get(self, *args, **kwargs):
+            return Response()
+
+    with pytest.raises(ValueError, match="недоверенный"):
+        download_text_attachment(Session(), "https://funpay.com/file/12345")
+
+
+def test_download_text_attachment_rejects_html_login_response():
+    import pytest
+    from funpay_orders import download_text_attachment
+
+    class Response:
+        url = "https://funpay.com/file/12345"
+        headers = {"Content-Type": "text/html"}
+
+        def raise_for_status(self):
+            pass
+
+        def close(self):
+            pass
+
+    class Session:
+        def get(self, *args, **kwargs):
+            return Response()
+
+    with pytest.raises(ValueError, match="HTML"):
+        download_text_attachment(Session(), "https://funpay.com/file/12345")
+
+
+def test_cold_start_treats_refunded_order_without_reservation_as_terminal():
+    assert funpay_cold_start_blockers({
+        "refunded": {"status": "refunded", "reservation": None}
+    }) == []
+
+
+
+def test_latest_refund_alert_is_not_hidden_by_a_previously_seen_buyer_message():
+    from funpay_orders import extract_chat_message_fragments, extract_last_customer_message_fragment
+
+    old_message = (
+        '<div class="chat-msg-item"><div class="chat-msg-text">'
+        'https://steamcommunity.com/tradeoffer/new/?partner=123&token=OLD'
+        '</div></div>'
+    )
+    refund = (
+        '<section role="alert" class="alert alert-info">'
+        'Продавец Koka2010 вернул деньги покупателю Koka20111 по заказу #LB9EF7W7.'
+        '</section>'
+    )
+    fragments = extract_chat_message_fragments(old_message + refund)
+
+    assert len(fragments) == 2
+    assert "вернул деньги" in fragments[-1]
+    assert extract_last_customer_message_fragment(old_message + refund) is None
+
+
+def test_find_open_order_is_ambiguous_when_another_order_is_sending_or_uncertain():
+    from funpay_orders import find_open_order_for_chat, open_orders_for_chat
+
+    pending = make_order("pending", status="awaiting_input")
+    uncertain = make_order("uncertain", status="delivery_uncertain")
+    orders = {"pending": pending, "uncertain": uncertain}
+
+    assert find_open_order_for_chat(orders, "123") is None
+    assert {item["key"] for item in open_orders_for_chat(orders, "123")} == {
+        "pending", "uncertain"
+    }
+
+
+def test_funpay_order_number_is_case_normalized_for_payment_and_refund_keys():
+    from funpay_orders import extract_order_number, payment_key
+
+    text = "Покупатель buyer оплатил заказ #abC123xy: 1 сет Steam"
+    assert extract_order_number(text) == "ABC123XY"
+    assert payment_key("123", text) == "fp-order-ABC123XY"
+
+
+def test_payment_and_refund_alerts_are_returned_in_page_order():
+    from funpay_orders import extract_paid_order_events
+
+    paid = (
+        '<div role="alert" class="alert alert-info">'
+        'Покупатель Buyer оплатил заказ #ABC12345: 1 полный сет карточек Steam'
+        '</div>'
+    )
+    refund = (
+        '<div role="alert" class="alert alert-info">'
+        'Продавец Seller вернул деньги покупателю Buyer по заказу #ABC12345.'
+        '</div>'
+    )
+    events = extract_paid_order_events(paid + refund)
+
+    assert len(events) == 2
+    assert is_paid_order_notification(events[0][1])
+    assert is_funpay_refund_notification(events[1][1])
 
