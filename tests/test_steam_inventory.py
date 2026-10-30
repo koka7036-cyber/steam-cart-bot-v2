@@ -109,7 +109,7 @@ def test_collect_inventory_pages_rejects_repeated_cursor():
         collect_inventory_pages(lambda cursor: pages.pop(0))
 
 
-def test_collect_inventory_pages_rejects_duplicate_asset_ids():
+def test_collect_inventory_pages_deduplicates_identical_page_boundary_assets():
     pages = [
         {
             "success": 1,
@@ -120,13 +120,35 @@ def test_collect_inventory_pages_rejects_duplicate_asset_ids():
         },
         {
             "success": 1,
-            "assets": [asset(1)],
+            "assets": [asset(1), asset(2)],
             "descriptions": [description("Card")],
             "more_items": 0,
         },
     ]
 
-    with pytest.raises(SteamInventoryPaginationError, match="повторил assetid"):
+    assets, _ = collect_inventory_pages(lambda cursor: pages.pop(0))
+
+    assert [item["assetid"] for item in assets] == ["1", "2"]
+
+
+def test_collect_inventory_pages_rejects_conflicting_duplicate_asset_ids():
+    pages = [
+        {
+            "success": 1,
+            "assets": [asset(1)],
+            "descriptions": [description("Card")],
+            "more_items": 1,
+            "last_assetid": "1",
+        },
+        {
+            "success": 1,
+            "assets": [{**asset(1), "classid": "999"}],
+            "descriptions": [description("Card")],
+            "more_items": 0,
+        },
+    ]
+
+    with pytest.raises(SteamInventoryPaginationError, match="разные данные для одного assetid"):
         collect_inventory_pages(lambda cursor: pages.pop(0))
 
 
@@ -159,3 +181,19 @@ def test_collect_inventory_pages_rejects_invalid_asset_ids():
                 "more_items": 0,
             }
         )
+
+def test_collect_inventory_pages_raises_when_a_later_page_fails():
+    def fetch_page(cursor):
+        if cursor is None:
+            return {
+                "success": 1,
+                "assets": [asset(1)],
+                "descriptions": [description("Card")],
+                "more_items": 1,
+                "last_assetid": "1",
+            }
+        raise RuntimeError("second page unavailable")
+
+    with pytest.raises(RuntimeError, match="second page unavailable"):
+        collect_inventory_pages(fetch_page)
+
