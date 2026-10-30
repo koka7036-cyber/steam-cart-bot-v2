@@ -765,3 +765,65 @@ def test_cold_start_treats_refunded_order_without_reservation_as_terminal():
         "refunded": {"status": "refunded", "reservation": None}
     }) == []
 
+
+
+def test_latest_refund_alert_is_not_hidden_by_a_previously_seen_buyer_message():
+    from funpay_orders import extract_chat_message_fragments, extract_last_customer_message_fragment
+
+    old_message = (
+        '<div class="chat-msg-item"><div class="chat-msg-text">'
+        'https://steamcommunity.com/tradeoffer/new/?partner=123&token=OLD'
+        '</div></div>'
+    )
+    refund = (
+        '<section role="alert" class="alert alert-info">'
+        'Продавец Koka2010 вернул деньги покупателю Koka20111 по заказу #LB9EF7W7.'
+        '</section>'
+    )
+    fragments = extract_chat_message_fragments(old_message + refund)
+
+    assert len(fragments) == 2
+    assert "вернул деньги" in fragments[-1]
+    assert extract_last_customer_message_fragment(old_message + refund) is None
+
+
+def test_find_open_order_is_ambiguous_when_another_order_is_sending_or_uncertain():
+    from funpay_orders import find_open_order_for_chat, open_orders_for_chat
+
+    pending = make_order("pending", status="awaiting_input")
+    uncertain = make_order("uncertain", status="delivery_uncertain")
+    orders = {"pending": pending, "uncertain": uncertain}
+
+    assert find_open_order_for_chat(orders, "123") is None
+    assert {item["key"] for item in open_orders_for_chat(orders, "123")} == {
+        "pending", "uncertain"
+    }
+
+
+def test_funpay_order_number_is_case_normalized_for_payment_and_refund_keys():
+    from funpay_orders import extract_order_number, payment_key
+
+    text = "Покупатель buyer оплатил заказ #abC123xy: 1 сет Steam"
+    assert extract_order_number(text) == "ABC123XY"
+    assert payment_key("123", text) == "fp-order-ABC123XY"
+
+
+def test_payment_and_refund_alerts_are_returned_in_page_order():
+    from funpay_orders import extract_paid_order_events
+
+    paid = (
+        '<div role="alert" class="alert alert-info">'
+        'Покупатель Buyer оплатил заказ #ABC12345: 1 полный сет карточек Steam'
+        '</div>'
+    )
+    refund = (
+        '<div role="alert" class="alert alert-info">'
+        'Продавец Seller вернул деньги покупателю Buyer по заказу #ABC12345.'
+        '</div>'
+    )
+    events = extract_paid_order_events(paid + refund)
+
+    assert len(events) == 2
+    assert is_paid_order_notification(events[0][1])
+    assert is_funpay_refund_notification(events[1][1])
+
