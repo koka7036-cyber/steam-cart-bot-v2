@@ -27,7 +27,7 @@ def collect_inventory_pages(
 
     assets: list[dict[str, Any]] = []
     descriptions: dict[str, dict[str, Any]] = {}
-    seen_asset_ids: set[str] = set()
+    seen_assets: dict[str, dict[str, Any]] = {}
     seen_cursors: set[str] = set()
     cursor: str | None = None
 
@@ -55,11 +55,16 @@ def collect_inventory_pages(
                 raise SteamInventoryPaginationError(
                     "Steam вернул некорректный assetid; кэш не обновлён."
                 )
-            if asset_id in seen_asset_ids:
-                raise SteamInventoryPaginationError(
-                    "Steam повторил assetid между страницами; кэш не обновлён."
-                )
-            seen_asset_ids.add(asset_id)
+            previous_asset = seen_assets.get(asset_id)
+            if previous_asset is not None:
+                # Some inventory implementations may repeat the boundary item.
+                # Ignore an identical copy, but reject conflicting data.
+                if previous_asset != asset:
+                    raise SteamInventoryPaginationError(
+                        "Steam вернул разные данные для одного assetid; кэш не обновлён."
+                    )
+                continue
+            seen_assets[asset_id] = asset
             assets.append(asset)
 
         for description in page_descriptions:
