@@ -176,7 +176,7 @@ def test_collect_inventory_pages_rejects_invalid_asset_ids():
         collect_inventory_pages(
             lambda cursor: {
                 "success": 1,
-                "assets": [{"assetid": "not-a-number"}],
+                "assets": [{"assetid": "not-a-number", "classid": "100", "instanceid": "0"}],
                 "descriptions": [],
                 "more_items": 0,
             }
