@@ -118,6 +118,7 @@ AUTOSTART_PS_SCRIPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__
 # Bootstrap fallback: older deployed updaters may update bot.py before they know
 # to deploy the helper file. Create the same fixed helper locally when needed.
 _AUTOSTART_HELPER_FALLBACK = r"""$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 $taskName = 'CardBot - AutoStart'
 $startFile = Join-Path $PSScriptRoot 'start.bat'
 $logFile = Join-Path $PSScriptRoot 'autostart_task.log'
