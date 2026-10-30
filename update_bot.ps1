@@ -125,7 +125,9 @@ public static class CredentialManager {
     if ([string]::IsNullOrWhiteSpace($remoteSha) -or $remoteSha -notmatch '^[0-9a-f]{40}$') {
         throw 'GitHub returned an invalid commit SHA.'
     }
-    if ([string]::IsNullOrWhiteSpace($remoteSha) -or $remoteSha -notmatch '^[0-9a-f]{40}    $localSha = ''
+    if ([string]::IsNullOrWhiteSpace($remoteSha) -or $remoteSha -notmatch '^[0-9a-f]{40}$') {
+        throw 'GitHub returned an invalid commit SHA.'
+    }
     if (Test-Path -LiteralPath $Marker) { $localSha = (Get-Content -LiteralPath $Marker -Raw -ErrorAction SilentlyContinue).Trim() }
     if (-not $Force -and $localSha -eq $remoteSha) {
         Log "Already current ($remoteSha)."
