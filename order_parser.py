@@ -29,6 +29,20 @@ def is_paid_order_notification(order_text):
     return any(re.search(pattern, text) for pattern in paid_markers)
 
 
+def is_funpay_refund_notification(order_text):
+    """Recognize an explicit system refund/return notification for a numbered order."""
+    text = html.unescape(order_text or "").lower().replace("ё", "е")
+    refund_markers = (
+        r"\bпродавец\b[\s\S]{0,160}\bвернул(?:а)?\s+деньги\b[\s\S]{0,160}\bпокупател",
+        r"\bденьги\s+возвращены\b[\s\S]{0,120}\bзаказ\b",
+        r"\bвозврат\s+(?:денег|средств)\b[\s\S]{0,120}\bзаказ\b",
+        r"\brefund(?:ed)?\b[\s\S]{0,160}\border\b",
+        r"\bseller\b[\s\S]{0,120}\brefunded?\b[\s\S]{0,120}\bbuyer\b",
+    )
+    has_order_number = bool(re.search(r"(?:заказ|order)\s*[№#]?\s*[A-Z0-9]{4,24}\b", text))
+    return has_order_number and any(re.search(pattern, text) for pattern in refund_markers)
+
+
 def detect_order_sets_and_quantity(order_text):
     """Return (sets_per_item, quantity) for supported FunPay card-set listings."""
     text = html.unescape(order_text or "").lower().replace("ё", "е")
