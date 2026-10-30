@@ -599,7 +599,7 @@ def reserve_funpay_order(record, ledger_data=None):
 
 
 def register_funpay_payment(node_id, buyer, text, sets_per_item, quantity):
-    """Create an idempotent order record and reserve stock exactly once."""
+    """Create an idempotent order record and recover an interrupted first reservation."""
     with funpay_orders_lock:
         data = load_funpay_orders()
         record, created = register_payment(
@@ -609,6 +609,10 @@ def register_funpay_payment(node_id, buyer, text, sets_per_item, quantity):
         if created:
             # Register the paid order first; then persist exact asset IDs before cache mutation.
             save_json(FP_ORDERS_FILE, data)
+        # A crash may occur after the initial ledger write but before reservation.
+        # Repeated payment notifications can safely resume only this untouched state.
+        # Orders already put in review after a stock/cache error are not retried automatically.
+        if record.get("status") == "awaiting_input" and not record.get("reservation"):
             reserve_funpay_order(record, data)
             save_json(FP_ORDERS_FILE, data)
         return record, created
