@@ -456,11 +456,14 @@ def migrate_funpay_delivery_config():
         changed = True
     # This is the bot's own delivery switch in funpay_config.json, not FunPay's
     # built-in automatic-delivery setting on the marketplace.
-    if cfg.get("auto_delivery_funpay") is not True:
-        cfg["auto_delivery_funpay"] = True
-        changed = True
-    if int(cfg.get("funpay_workflow_version", 0) or 0) < 3:
-        cfg["funpay_workflow_version"] = 3
+    # Safety release gate: the previous migration enabled live delivery on
+    # startup before a real end-to-end test had been completed. On the first
+    # startup with workflow v4, pause custom delivery once. An administrator
+    # may explicitly re-enable it only after the controlled live test passes.
+    workflow_version = int(cfg.get("funpay_workflow_version", 0) or 0)
+    if workflow_version < 4:
+        cfg["auto_delivery_funpay"] = False
+        cfg["funpay_workflow_version"] = 4
         changed = True
     if changed:
         save_json(FP_CONFIG_FILE, cfg)
