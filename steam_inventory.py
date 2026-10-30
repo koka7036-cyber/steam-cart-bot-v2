@@ -46,9 +46,14 @@ def collect_inventory_pages(
             )
 
         for asset in page_assets:
-            if not isinstance(asset, dict) or asset.get("assetid") is None:
+            if (
+                not isinstance(asset, dict)
+                or asset.get("assetid") is None
+                or asset.get("classid") is None
+                or asset.get("instanceid") is None
+            ):
                 raise SteamInventoryPaginationError(
-                    "В ответе Steam найден предмет без корректного assetid."
+                    "В ответе Steam у предмета отсутствует assetid/classid/instanceid."
                 )
             asset_id = str(asset["assetid"]).strip()
             if not asset_id.isdigit():
@@ -82,6 +87,12 @@ def collect_inventory_pages(
 
         has_more = page.get("more_items") in (1, True, "1")
         if not has_more:
+            for asset in assets:
+                description_key = f"{asset['classid']}_{asset['instanceid']}"
+                if description_key not in descriptions:
+                    raise SteamInventoryPaginationError(
+                        "Для одного или нескольких предметов Steam не вернул описание; кэш не обновлён."
+                    )
             return assets, descriptions
 
         next_cursor = str(page.get("last_assetid") or "").strip()
