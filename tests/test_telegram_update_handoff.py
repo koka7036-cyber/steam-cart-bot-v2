@@ -149,7 +149,7 @@ def test_funpay_watcher_uses_structured_history_and_numeric_author_filtering():
     assert "parse_funpay_history_payload(" in watcher
     assert 'timeline["system_events"]' in watcher
     assert 'timeline["latest_buyer_message"]' in watcher
-    assert "message_id=latest_buyer_message.get('id')" in watcher
+    assert 'message_id=latest_buyer_message.get("id")' in watcher
     assert "extract_paid_order_events(" not in watcher
     assert "extract_last_customer_message_fragment(" not in watcher
 
