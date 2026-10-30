@@ -1,5 +1,5 @@
 """Regression tests for safe FunPay order matching."""
-from funpay_orders import (decode_text_attachment, extract_last_chat_message_fragment, extract_steam_trade_url, extract_text_attachment_href, filter_reserved_assets, find_open_order_for_chat, funpay_cold_start_blockers, inventory_cache_freshness_error, is_funpay_system_message, mark_input_received, register_payment, voucher_redemption_block_reason, voucher_reset_block_reason)
+from funpay_orders import (decode_text_attachment, extract_last_chat_message_fragment, extract_steam_trade_url, extract_text_attachment_href, filter_reserved_assets, find_open_order_for_chat, funpay_cold_start_blockers, funpay_input_signature, inventory_cache_freshness_error, is_funpay_system_message, mark_input_received, register_payment, voucher_redemption_block_reason, voucher_reset_block_reason)
 from order_parser import is_paid_order_notification
 
 
@@ -64,13 +64,11 @@ def test_delivered_order_cannot_be_moved_back_by_late_input():
     assert order["input_kind"] is None
 
 
-
 def test_review_order_is_not_overwritten_by_late_input():
     order = make_order("review", status="review")
     mark_input_received(order, "chat_trade_url")
     assert order["status"] == "review"
     assert order["input_kind"] is None
-
 
 
 def test_payment_registration_is_idempotent_for_order_number():
@@ -138,7 +136,6 @@ def test_extract_steam_trade_url_rejects_ambiguous_multiple_links():
     assert extract_steam_trade_url(a + "\n" + b) is None
 
 
-
 def test_extract_text_attachment_href_from_funpay_chat_file():
     fragment = (
         '<div class="chat-msg-file">'
@@ -194,7 +191,6 @@ def test_retry_required_order_is_open_for_corrected_input():
     assert find_open_order_for_chat({"retry": order}, "123") is order
 
 
-
 def test_extract_last_chat_message_fragment_does_not_reuse_old_trade_link_for_latest_file():
     old_url = "https://steamcommunity.com/tradeoffer/new/?partner=123&token=OLD"
     html_doc = (
@@ -220,6 +216,48 @@ def test_extract_last_chat_message_fragment_returns_latest_text():
     assert "new" in extract_last_chat_message_fragment(html_doc)
     assert "old" not in extract_last_chat_message_fragment(html_doc)
 
+
+def test_restore_reserved_assets_is_idempotent():
+    from funpay_orders import restore_reserved_assets
+
+    cache = {"games": {"Game": {"Card A": ["10"]}}, "total_cards": 1}
+    reservation = {
+        "asset_ids": ["11", "12"],
+        "asset_locations": [
+            {"game": "Game", "card": "Card A", "asset_id": "11"},
+            {"game": "Game", "card": "Card B", "asset_id": "12"},
+        ],
+    }
+
+    once = restore_reserved_assets(cache, reservation)
+    twice = restore_reserved_assets(once, reservation)
+
+    assert once is not None
+    assert twice is not None
+    assert twice["games"]["Game"]["Card A"] == ["10", "11"]
+    assert twice["games"]["Game"]["Card B"] == ["12"]
+    assert twice["total_cards"] == 3
+    assert cache["games"]["Game"]["Card A"] == ["10"]
+
+
+def test_restore_reserved_assets_rejects_malformed_reservation_without_mutating_cache():
+    from funpay_orders import restore_reserved_assets
+
+    cache = {"games": {"Game": {"Card A": ["10"]}}, "total_cards": 1}
+    before = {
+        "games": {"Game": {"Card A": ["10"]}},
+        "total_cards": 1,
+    }
+    malformed = {
+        "asset_ids": ["11", "11"],
+        "asset_locations": [
+            {"game": "Game", "card": "Card A", "asset_id": "11"},
+            {"game": "Game", "card": "Card B", "asset_id": "11"},
+        ],
+    }
+
+    assert restore_reserved_assets(cache, malformed) is None
+    assert cache == before
 
 
 def test_filter_reserved_assets_excludes_pending_and_uncertain_offers():
@@ -261,7 +299,6 @@ def test_filter_reserved_assets_excludes_uncertain_voucher_assets():
     assert filtered["games"]["Game"]["Card"] == ["1", "3"]
 
 
-
 def test_extract_attachment_link_inside_funpay_message_wrapper():
     fragment = (
         '<div class="chat-msg-item">'
@@ -271,7 +308,6 @@ def test_extract_attachment_link_inside_funpay_message_wrapper():
     assert extract_text_attachment_href(
         fragment, "https://funpay.com/chat/?node=987"
     ) == "https://funpay.com/file/download/987"
-
 
 
 def test_order_creation_notification_is_not_treated_as_paid():
@@ -296,7 +332,6 @@ def test_negative_payment_text_is_not_treated_as_paid():
     assert not is_paid_order_notification("Оплата не прошла")
 
 
-
 def test_system_message_requires_funpay_alert_marker():
     assert is_funpay_system_message('<div role="alert">Покупатель Alex оплатил заказ #ABC12345</div>')
     assert is_funpay_system_message(
@@ -312,7 +347,6 @@ def test_funpay_order_number_can_contain_letters():
     text = "Покупатель Alex оплатил заказ #ABC12345. Лот: Steam cards"
     assert extract_order_number(text) == "ABC12345"
     assert payment_key("123", text) == "fp-order-ABC12345"
-
 
 
 def test_cold_start_is_blocked_for_unresolved_orders_and_reservations():
@@ -352,7 +386,6 @@ def test_inventory_cache_freshness_guard():
     )
 
 
-
 def test_reset_blocks_used_or_previously_sent_vouchers():
     assert voucher_reset_block_reason({"used": True}) is not None
     assert voucher_reset_block_reason({"used": False, "delivery_state": "sending"}) is not None
@@ -375,7 +408,6 @@ def test_reset_allows_unused_voucher_or_definite_failed_attempt():
     assert voucher_reset_block_reason(None) is not None
 
 
-
 def test_redemption_guard_blocks_stale_reset_state_even_when_used_is_false():
     assert voucher_redemption_block_reason({
         "used": False, "delivery_state": "sent", "trade_offer_id": "987654"
@@ -393,3 +425,57 @@ def test_redemption_guard_allows_new_or_definitely_failed_code():
     assert voucher_redemption_block_reason({
         "used": False, "delivery_state": "failed"
     }) is None
+
+
+def test_extract_chat_message_fragments_returns_all_messages_in_order():
+    from funpay_orders import extract_chat_message_fragments
+
+    html_doc = (
+        '<div class="chat-msg-item"><div role="alert" class="alert alert-info">'
+        'Покупатель Buyer оплатил заказ #ABCD1234, Steam, 1 полный сет карточек</div></div>'
+        '<div class="chat-msg-item"><div class="chat-msg-text">'
+        'https://steamcommunity.com/tradeoffer/new/?partner=123456&amp;token=AbCdEf12'
+        '</div></div>'
+    )
+    fragments = extract_chat_message_fragments(html_doc)
+    assert len(fragments) == 2
+    assert "оплатил заказ #ABCD1234" in fragments[0]
+    assert "token=AbCdEf12" in fragments[1]
+
+
+def test_open_orders_for_chat_returns_candidates_oldest_first_for_manual_selection():
+    from funpay_orders import open_orders_for_chat
+
+    older = make_order("SW7M87P5", updated_at=10)
+    older["created_at"] = 100
+    newer = make_order("KUGQWJKH", updated_at=20)
+    newer["created_at"] = 200
+    other_chat = make_order("OTHER", node_id="999")
+    other_chat["created_at"] = 50
+
+    result = open_orders_for_chat(
+        {"older": older, "newer": newer, "other": other_chat}, "123"
+    )
+    assert [item["key"] for item in result] == ["SW7M87P5", "KUGQWJKH"]
+
+
+def test_open_orders_for_chat_excludes_closed_orders():
+    from funpay_orders import open_orders_for_chat
+
+    open_order = make_order("open")
+    closed_order = make_order("closed", status="offer_sent")
+    assert [item["key"] for item in open_orders_for_chat(
+        {"open": open_order, "closed": closed_order}, "123"
+    )] == ["open"]
+
+
+def test_funpay_input_signature_is_stable_when_only_css_classes_change():
+    first = '<div class="chat-msg unread"><span>17:23</span><p>https://steamcommunity.com/tradeoffer/new/?partner=123&token=abc</p></div>'
+    second = '<div class="chat-msg"><span>17:23</span><p>https://steamcommunity.com/tradeoffer/new/?partner=123&token=abc</p></div>'
+    assert funpay_input_signature("123", "Buyer", first, "trade URL") == funpay_input_signature("123", "Buyer", second, "trade URL")
+
+
+def test_funpay_input_signature_distinguishes_a_new_message_with_same_url():
+    first = '<div class="chat-msg"><span>17:23</span><p>same trade URL</p></div>'
+    second = '<div class="chat-msg"><span>17:24</span><p>same trade URL</p></div>'
+    assert funpay_input_signature("123", "Buyer", first, "same trade URL") != funpay_input_signature("123", "Buyer", second, "same trade URL")

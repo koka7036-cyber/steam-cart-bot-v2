@@ -242,3 +242,49 @@ def test_corrupted_untrusted_quantity_does_not_crash_ledger_sanitizer(tmp_path):
     saved = load_orders(target)["orders"]["d-corrupt"]
     assert saved["sets"] is None
     assert "trade_url" not in saved
+
+
+def test_listing_id_conflict_stays_in_manual_review_after_late_events():
+    orders = {}
+    record, _, _ = upsert_deal(
+        orders, deal_id="conflict-1", status="PAID", item_id="item-one",
+        chat_id="chat-conflict", sets=1, event_type="ITEM_PAID",
+    )
+    upsert_deal(
+        orders, deal_id="conflict-1", status="PAID", item_id="item-five",
+        chat_id="chat-conflict", sets=5, event_type="ITEM_PAID",
+    )
+    assert record["mapping_conflict"] is True
+    assert record["fulfillment_status"] == "needs_review"
+
+    upsert_deal(
+        orders, deal_id="conflict-1", status="SENT", item_id="item-one",
+        chat_id="chat-conflict", sets=1, event_type="ITEM_SENT",
+    )
+    assert record["fulfillment_status"] == "needs_review"
+    assert active_orders_for_chat(orders, "chat-conflict") == []
+
+    matched, result = mark_trade_url_received(orders, chat_id="chat-conflict")
+    assert matched is None
+    assert result == "unmatched"
+    assert record["fulfillment_status"] == "needs_review"
+    assert record["trade_url_received"] is False
+
+
+def test_quantity_conflict_stays_in_manual_review_after_confirmed_event():
+    orders = {}
+    record, _, _ = upsert_deal(
+        orders, deal_id="conflict-2", status="PAID", item_id="item-one",
+        chat_id="chat-conflict-2", sets=1, event_type="ITEM_PAID",
+    )
+    upsert_deal(
+        orders, deal_id="conflict-2", status="PAID", item_id="item-one",
+        chat_id="chat-conflict-2", sets=5, event_type="ITEM_PAID",
+    )
+    upsert_deal(
+        orders, deal_id="conflict-2", status="CONFIRMED", item_id="item-one",
+        chat_id="chat-conflict-2", sets=1, event_type="DEAL_CONFIRMED",
+    )
+    assert record["mapping_conflict"] is True
+    assert record["fulfillment_status"] == "needs_review"
+    assert active_orders_for_chat(orders, "chat-conflict-2") == []

@@ -23,7 +23,7 @@ STEAM_LOGIN = os.getenv("STEAM_LOGIN", "")
 STEAM_PASSWORD = os.getenv("STEAM_PASSWORD", "")
 ASF_IPC_URL = "http://127.0.0.1:1242/Api/Command"
 
-BAT_PATH = r"C:\CardBot\start.bat"
+BAT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "start.bat")
 REG_RUN_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
 REG_APP_NAME = "CardBotFarmAutostart"
 
@@ -111,14 +111,14 @@ bot.edit_message_text = _edit_message_with_plain_text_fallback
 import subprocess
 
 AUTOSTART_TASK_NAME = "CardBot - AutoStart"
-AUTOSTART_PS_SCRIPT_PATH = r"C:\CardBot\toggle_autostart_task.ps1"
+AUTOSTART_PS_SCRIPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "toggle_autostart_task.ps1")
 
 # Bootstrap fallback: older deployed updaters may update bot.py before they know
 # to deploy the helper file. Create the same fixed helper locally when needed.
 _AUTOSTART_HELPER_FALLBACK = r"""$ErrorActionPreference = 'Stop'
 $taskName = 'CardBot - AutoStart'
-$startFile = 'C:\CardBot\start.bat'
-$logFile = 'C:\CardBot\autostart_task.log'
+$startFile = Join-Path $PSScriptRoot 'start.bat'
+$logFile = Join-Path $PSScriptRoot 'autostart_task.log'
 $mutexName = 'Global\CardBotAutoStartTaskToggle'
 $mutex = New-Object System.Threading.Mutex($false, $mutexName)
 $locked = $false
@@ -167,10 +167,10 @@ try {
         $operation = 'DISABLED'
     } elseif ($null -eq $existing -or $existing.State -eq 'Disabled') {
         if (-not (Test-Path -LiteralPath $startFile -PathType Leaf)) {
-            throw 'Не найден C:\CardBot\start.bat; задача не изменена.'
+            throw ('Не найден start.bat рядом с ботом: ' + $startFile + '; задача не изменена.')
         }
         $user = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-        $action = New-ScheduledTaskAction -Execute (Join-Path $env:WINDIR 'System32\cmd.exe') -Argument ('/d /c ""' + $startFile + '""') -WorkingDirectory 'C:\CardBot'
+        $action = New-ScheduledTaskAction -Execute (Join-Path $env:WINDIR 'System32\cmd.exe') -Argument ('/d /c set CARD_BOT_NONINTERACTIVE=1&& call "' + $startFile + '"') -WorkingDirectory $PSScriptRoot
         $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
         $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero)
         $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
@@ -240,7 +240,7 @@ def toggle_autostart():
     """Toggle one fixed scheduled task; no user-supplied command reaches PowerShell."""
     before = is_autostart_enabled()
     if not _ensure_autostart_helper():
-        return before, "Не найден файл управления автозапуском, и не удалось создать его. Проверь права доступа к C:\\CardBot."
+        return before, "Не удалось создать файл управления автозапуском рядом с ботом. Проверь права доступа к папке проекта."
     try:
         result = subprocess.run(
             ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive",
@@ -252,16 +252,23 @@ def toggle_autostart():
         return before, "Не удалось выполнить команду управления автозапуском Windows."
     if result.returncode != 0:
         logging.warning("Windows auto-start helper exited with code %s", result.returncode)
-        detail = (result.stderr or "").strip().splitlines()
-        return before, "Windows не подтвердила изменение автозапуска. " + (detail[-1][:250] if detail else "Проверь autostart_task.log.")
+        # Preserve parser context: the last line alone often only says
+        # FullyQualifiedErrorId: UnexpectedToken and hides the useful location.
+        detail = (result.stderr or result.stdout or "").strip().splitlines()
+        detail_text = " | ".join(line.strip() for line in detail[-6:] if line.strip())
+        if detail_text:
+            detail_text = detail_text[-900:]
+        else:
+            detail_text = "PowerShell не вернул подробности; autostart_task.log может отсутствовать, если скрипт не запустился."
+        return before, "Windows не подтвердила изменение автозапуска. " + detail_text
     after = is_autostart_enabled()
     if after == before:
         return after, "Windows не подтвердила переключение автозапуска. Проверь Планировщик заданий."
     output = (result.stdout or "").strip()
     if "LEGACY_ENTRY_REMAINS" in output:
         if after:
-            return True, "🟢 Автозапуск Windows включён, но старая запись автозапуска не удалена. Проверь C:\\CardBot\\autostart_task.log."
-        return False, "🔴 Автозапуск Windows выключен, но старая запись автозапуска не удалена. Проверь C:\\CardBot\\autostart_task.log."
+            return True, "🟢 Автозапуск Windows включён, но старая запись не удалена. Проверь autostart_task.log в папке бота."
+        return False, "🔴 Автозапуск Windows выключен, но старая запись не удалена. Проверь autostart_task.log в папке бота."
     if after:
         return True, "🟢 Автозапуск Windows включён."
     return False, "🔴 Автозапуск Windows выключен."
@@ -333,28 +340,75 @@ def funpay_ping_and_raise(force_raise=False):
         fp_state["last_ping"] = time.strftime("%H:%M:%S")
         fp_state["error"] = None
 
-        last_raise_ts = cfg.get("last_raise_ts", 0)
-        if force_raise or (time.time() - last_raise_ts >= 14400):
+        # Throttle attempts separately from confirmed successful raises. A failed or
+        # empty attempt must never be reported as a successful raise.
+        last_raise_ts = float(cfg.get("last_raise_ts", 0) or 0)
+        last_raise_attempt_ts = float(cfg.get("last_raise_attempt_ts", last_raise_ts) or 0)
+        if force_raise or (time.time() - last_raise_attempt_ts >= 14400):
+            # Record the attempt before network calls so outages cannot trigger a
+            # raise request every 15 seconds from the background polling loop.
+            attempt_time = time.time()
+            cfg["last_raise_attempt_ts"] = attempt_time
+            save_json(FP_CONFIG_FILE, cfg)
             prof = s.get(f"https://funpay.com/users/{user_id}/", timeout=15)
-            nodes = list(set(re.findall(r'https://funpay\.com/lots/(\d+)/trade', prof.text)))
-            if nodes:
+            prof.raise_for_status()
+            nodes = sorted(set(re.findall(r'https://funpay\.com/lots/(\d+)/trade', prof.text)))
+
+            if not nodes:
+                fp_state["last_raise"] = "Лоты не найдены на странице профиля; поднятие не подтверждено"
+            else:
                 raised_cnt = 0
+                failed_cnt = 0
                 for node_id in nodes:
-                    trade_page = s.get(f"https://funpay.com/lots/{node_id}/trade", timeout=15)
-                    g_match = re.search(r'data-game="(\d+)"\s+data-node="' + str(node_id) + r'"', trade_page.text)
-                    if g_match:
+                    try:
+                        trade_page = s.get(f"https://funpay.com/lots/{node_id}/trade", timeout=15)
+                        trade_page.raise_for_status()
+                        g_match = re.search(r'data-game="(\d+)"\s+data-node="' + re.escape(str(node_id)) + r'"', trade_page.text)
+                        if not g_match:
+                            failed_cnt += 1
+                            continue
+
                         game_id = g_match.group(1)
-                        ajax_headers = {"X-Requested-With": "XMLHttpRequest", "Referer": f"https://funpay.com/lots/{node_id}/trade"}
-                        resp = s.post("https://funpay.com/lots/raise", data={"game_id": game_id, "node_id": node_id}, headers=ajax_headers, timeout=15).json()
-                        if "modal" in resp:
-                            sub_nodes = re.findall(r'name="node_ids\[\]"\s+value="(\d+)"', resp["modal"])
+                        ajax_headers = {
+                            "X-Requested-With": "XMLHttpRequest",
+                            "Referer": f"https://funpay.com/lots/{node_id}/trade",
+                        }
+                        resp = s.post(
+                            "https://funpay.com/lots/raise",
+                            data={"game_id": game_id, "node_id": node_id},
+                            headers=ajax_headers,
+                            timeout=15,
+                        )
+                        resp.raise_for_status()
+                        result = resp.json()
+                        if "modal" in result:
+                            sub_nodes = re.findall(r'name="node_ids\[\]"\s+value="(\d+)"', result["modal"])
                             if sub_nodes:
-                                resp = s.post("https://funpay.com/lots/raise", data={"game_id": game_id, "node_id": node_id, "node_ids[]": sub_nodes}, headers=ajax_headers, timeout=15).json()
-                        if resp.get("error") == 0:
+                                resp = s.post(
+                                    "https://funpay.com/lots/raise",
+                                    data=[("game_id", game_id), ("node_id", node_id)]
+                                         + [("node_ids[]", sub_node) for sub_node in sub_nodes],
+                                    headers=ajax_headers,
+                                    timeout=15,
+                                )
+                                resp.raise_for_status()
+                                result = resp.json()
+                        if result.get("error") == 0:
                             raised_cnt += 1
-                cfg["last_raise_ts"] = time.time()
+                        else:
+                            failed_cnt += 1
+                    except (requests.RequestException, ValueError, KeyError, TypeError):
+                        failed_cnt += 1
+                        logging.warning("FunPay lot raise failed for node %s", node_id)
+
+                # Persist attempt throttling even on failure, to avoid hammering FunPay.
+                # Only advance last_raise_ts when every discovered section succeeded.
+                if raised_cnt == len(nodes) and failed_cnt == 0:
+                    cfg["last_raise_ts"] = attempt_time
+                    fp_state["last_raise"] = f"Поднятие подтверждено: {raised_cnt}/{len(nodes)} разделов в {time.strftime('%H:%M')}"
+                else:
+                    fp_state["last_raise"] = f"Поднятие не полностью подтверждено: {raised_cnt}/{len(nodes)} разделов; ошибок/пропусков: {failed_cnt}"
                 save_json(FP_CONFIG_FILE, cfg)
-                fp_state["last_raise"] = f"Поднято разделов: {raised_cnt}/{len(nodes)} в {time.strftime('%H:%M')}"
 
         return True, f"Онлайн активен (ID: {user_id})"
     except Exception as e:
@@ -412,7 +466,7 @@ def send_funpay_chat_message(node_id, text):
         return False, f"Ошибка отправки: {e}"
 
 from order_parser import detect_order_sets_and_quantity, is_paid_order_notification
-from funpay_orders import (decode_text_attachment, extract_last_chat_message_fragment, extract_steam_trade_url, extract_text_attachment_href, filter_reserved_assets, find_open_order_for_chat, funpay_cold_start_blockers, inventory_cache_freshness_error, is_funpay_system_message, mark_input_received, register_payment, message_signature, voucher_redemption_block_reason, voucher_reset_block_reason)
+from funpay_orders import (decode_text_attachment, extract_last_chat_message_fragment, extract_steam_trade_url, extract_text_attachment_href, filter_reserved_assets, find_open_order_for_chat, funpay_cold_start_blockers, inventory_cache_freshness_error, is_funpay_system_message, mark_input_received, register_payment, message_signature, restore_reserved_assets, voucher_redemption_block_reason, voucher_reset_block_reason)
 from sales_analytics import summarize_sales
 from playerok_orders import (
     active_orders_for_chat,
@@ -451,16 +505,18 @@ def migrate_funpay_delivery_config():
     if cfg.get("delivery_input_mode") != "chat_only":
         cfg["delivery_input_mode"] = "chat_only"
         changed = True
-    if cfg.get("allow_chat_trade_url") is not True:
+    # Set safe defaults only when the options have never been configured.
+    # Never force an administrator's explicit OFF choice back to ON at startup.
+    if "allow_chat_trade_url" not in cfg:
         cfg["allow_chat_trade_url"] = True
         changed = True
-    # This is the bot's own delivery switch in funpay_config.json, not FunPay's
-    # built-in automatic-delivery setting on the marketplace.
-    if cfg.get("auto_delivery_funpay") is not True:
-        cfg["auto_delivery_funpay"] = True
-        changed = True
-    if int(cfg.get("funpay_workflow_version", 0) or 0) < 3:
-        cfg["funpay_workflow_version"] = 3
+    # Safety release gate: pause custom delivery once on the first startup
+    # with workflow v4, until a controlled end-to-end test has passed.
+    # An administrator may explicitly re-enable it after that test.
+    workflow_version = int(cfg.get("funpay_workflow_version", 0) or 0)
+    if workflow_version < 4:
+        cfg["auto_delivery_funpay"] = False
+        cfg["funpay_workflow_version"] = 4
         changed = True
     if changed:
         save_json(FP_CONFIG_FILE, cfg)
@@ -503,27 +559,16 @@ def recover_interrupted_funpay_deliveries():
 
 
 def restore_reservation_to_cache(reservation):
-    """Restore a reservation only after verified cancellation/return of the Steam offer."""
-    locations = reservation.get("asset_locations", []) if isinstance(reservation, dict) else []
-    if not locations:
-        return False
+    """Atomically validate and restore a complete reservation after verified return."""
     with delivery_lock:
         cache = load_json(CACHE_FILE, {})
-        games = cache.get("games", {})
-        for item in locations:
-            game = item.get("game")
-            card = item.get("card")
-            asset_id = str(item.get("asset_id", ""))
-            if not game or not card or not asset_id:
-                continue
-            game_cards = games.setdefault(game, {})
-            card_assets = game_cards.setdefault(card, [])
-            if asset_id not in card_assets:
-                card_assets.append(asset_id)
-        cache["total_cards"] = sum(
-            len(asset_ids) for cards in games.values() for asset_ids in cards.values()
-        )
-        save_json(CACHE_FILE, cache)
+        restored_cache = restore_reserved_assets(cache, reservation)
+        if restored_cache is None:
+            logging.error(
+                "Refusing to restore malformed/incomplete FunPay reservation; cache unchanged."
+            )
+            return False
+        save_json(CACHE_FILE, restored_cache)
     return True
 
 
@@ -555,7 +600,7 @@ def reserve_funpay_order(record, ledger_data=None):
 
 
 def register_funpay_payment(node_id, buyer, text, sets_per_item, quantity):
-    """Create an idempotent order record and reserve stock exactly once."""
+    """Create an idempotent order record and recover an interrupted first reservation."""
     with funpay_orders_lock:
         data = load_funpay_orders()
         record, created = register_payment(
@@ -565,6 +610,10 @@ def register_funpay_payment(node_id, buyer, text, sets_per_item, quantity):
         if created:
             # Register the paid order first; then persist exact asset IDs before cache mutation.
             save_json(FP_ORDERS_FILE, data)
+        # A crash may occur after the initial ledger write but before reservation.
+        # Repeated payment notifications can safely resume only this untouched state.
+        # Orders already put in review after a stock/cache error are not retried automatically.
+        if record.get("status") == "awaiting_input" and not record.get("reservation"):
             reserve_funpay_order(record, data)
             save_json(FP_ORDERS_FILE, data)
         return record, created
@@ -981,12 +1030,17 @@ def asf_command(cmd):
     except Exception as e:
         return False, f"Нет связи с ASF: {e}"
 
-def get_steam_session(force_new=False):
+def get_steam_session(force_new=False, password_override=None):
     sess = load_json(SESSION_FILE, {})
     if not force_new and sess.get("steamLoginSecure") and time.time() - sess.get("timestamp", 0) < 43200:
+        print("[Steam] [✓] Используем сохранённую сессию Steam.", flush=True)
         return sess["steamLoginSecure"], None
 
+    password = password_override if password_override is not None else STEAM_PASSWORD
+    if not STEAM_LOGIN or not password:
+        return None, "Не задан логин Steam или пароль. Открой в Telegram «🔐 Авторизация Steam» и выбери «Войти в Steam»."
     try:
+        print("[Steam] [1/3] Запрашиваю ключ шифрования Steam...", flush=True)
         r1 = requests.get(
             "https://api.steampowered.com/IAuthenticationService/GetPasswordRSAPublicKey/v1/",
             params={"input_json": json.dumps({"account_name": STEAM_LOGIN})},
@@ -998,8 +1052,9 @@ def get_steam_session(force_new=False):
         rsa_timestamp = r1["timestamp"]
 
         pub_key = rsa.PublicKey(mod, exp)
-        enc_password = base64.b64encode(rsa.encrypt(STEAM_PASSWORD.encode("utf-8"), pub_key)).decode("utf-8")
+        enc_password = base64.b64encode(rsa.encrypt(password.encode("utf-8"), pub_key)).decode("utf-8")
 
+        print("[Steam] [2/3] Ключ получен. Отправляю запрос авторизации Steam...", flush=True)
         begin_payload = {
             "account_name": STEAM_LOGIN,
             "encrypted_password": enc_password,
@@ -1019,8 +1074,10 @@ def get_steam_session(force_new=False):
         request_id = r2.get("request_id")
         steamid = r2.get("steamid", STEAM_ID)
         if not client_id:
+            print("[Steam] [✗] Steam не создал сессию авторизации; проверь пароль, логин и возможные ограничения входа.", flush=True)
             return None, "Steam отклонил автологин."
 
+        print("[Steam] [3/3] Запрос принят. Проверяю подтверждение Steam Guard через ASF...", flush=True)
         ok, asf_res = asf_command(f"2fa {STEAM_LOGIN}")
         if not ok:
             return None, f"Не удалось получить 2FA из ASF: {asf_res}"
@@ -1038,21 +1095,31 @@ def get_steam_session(force_new=False):
         )
 
         poll_payload = {"client_id": client_id, "request_id": request_id}
-        r4 = requests.post(
-            "https://api.steampowered.com/IAuthenticationService/PollAuthSessionStatus/v1/",
-            data={"input_json": json.dumps(poll_payload)},
-            timeout=10
-        ).json().get("response", {})
+        r4 = {}
+        for _attempt in range(30):
+            poll_response = requests.post(
+                "https://api.steampowered.com/IAuthenticationService/PollAuthSessionStatus/v1/",
+                data={"input_json": json.dumps(poll_payload)},
+                timeout=10
+            )
+            poll_response.raise_for_status()
+            r4 = poll_response.json().get("response", {})
+            if r4.get("access_token"):
+                break
+            time.sleep(2)
 
         access_token = r4.get("access_token")
         if not access_token:
-            return None, "Не удалось получить токен сессии Steam."
+            print("[Steam] [!] Steam не подтвердил вход за отведённое время.", flush=True)
+            return None, "Steam не подтвердил вход за 60 секунд. Проверь уведомления Steam Guard/мобильного приложения и повтори авторизацию."
 
         cookie_val = f"{steamid}%7C%7C{access_token}"
         save_json(SESSION_FILE, {"steamLoginSecure": cookie_val, "timestamp": time.time()})
+        print("[Steam] [✓] Авторизация подтверждена Steam; сессия сохранена.", flush=True)
         return cookie_val, None
     except Exception as e:
-        return None, f"Ошибка автологина: {e}"
+        logging.warning("Steam authentication failed (%s)", type(e).__name__)
+        return None, f"Ошибка авторизации Steam: {type(e).__name__}. Проверь интернет, логин и пароль."
 
 def update_inventory_cache():
     steam_login_secure, _ = get_steam_session()
@@ -1629,6 +1696,8 @@ def start_playerok_monitor():
 ADMIN_MAIN_MENU = "🏠 Главное меню"
 ADMIN_BACK_MENU = "⬅️ Назад"
 admin_menu_state = {}
+pending_steam_password_admin = set()
+restart_requested = False
 
 def build_admin_keyboard():
     db = load_json(DB_FILE, {"admin_id": None, "vouchers": {}})
@@ -1638,10 +1707,19 @@ def build_admin_keyboard():
 
     if section == "stock":
         markup.add("🔄 Обновить кэш склада", "📊 Остатки в кэше")
-        markup.add("🟢 Коды FunPay (1 сет)", "🟢 Коды FunPay (5 сетов)")
-        markup.add("🔵 Коды Playerok (1 сет)", "🔵 Коды Playerok (5 сетов)")
+        markup.add("📋 Панель FunPay — сводка", "📋 Последние заказы FunPay")
+        markup.add("🔵 Playerok — панель", "📋 Последние сделки Playerok")
         markup.add(ADMIN_BACK_MENU)
     elif section == "funpay":
+        fp_cfg = load_json(FP_CONFIG_FILE, {})
+        fp_key = str(fp_cfg.get("golden_key", "")).strip()
+        fp_key_label = "🔑 Ключ FunPay: задан 🟢" if fp_key else "🔑 Ключ FunPay: НЕ задан 🔴"
+        markup.add(fp_key_label)
+        fp_cfg = load_json(FP_CONFIG_FILE, {})
+        delivery_on = fp_cfg.get("auto_delivery_funpay", False) is True
+        input_on = fp_cfg.get("allow_chat_trade_url", True) is True
+        markup.add("🚦 Автовыдача: ВКЛ 🟢" if delivery_on else "🚦 Автовыдача: ВЫКЛ 🔴")
+        markup.add("📨 Приём ссылок: ВКЛ 🟢" if input_on else "📨 Приём ссылок: ВЫКЛ 🔴")
         markup.add("📋 Панель FunPay — сводка", "📋 Последние заказы FunPay")
         markup.add("🔄 Проверить соединение FunPay", ADMIN_BACK_MENU)
     elif section == "playerok":
@@ -1653,16 +1731,17 @@ def build_admin_keyboard():
     elif section == "settings":
         auto_label = "⚙️ Автозапуск Windows: ВКЛ 🟢" if is_autostart_enabled() else "⚙️ Автозапуск Windows: ВЫКЛ 🔴"
         markup.add(auto_label)
-        markup.add("🔄 Проверить состояние бота", ADMIN_BACK_MENU)
+        markup.add("🔐 Авторизация Steam", "🔄 Проверить состояние бота")
+        markup.add("🔁 Перезапустить бота", ADMIN_BACK_MENU)
     else:
-        markup.add("📦 Склад и коды", "🟢 FunPay")
+        markup.add("📦 Склад", "🟢 FunPay")
         markup.add("🔵 Playerok", "📈 Продажи и аналитика")
         markup.add("⚙️ Настройки")
     return markup
 
 def build_customer_keyboard():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add("🔗 Где взять трейд-ссылку?", "❓ Как получить карточки?")
+    markup.add("🔗 Где взять трейд-ссылку?", "❓ Как отправить трейд-ссылку?")
     return markup
 
 def get_tradeurl_help_markup():
@@ -1682,19 +1761,17 @@ def start_cmd(message):
             message.chat.id,
             f"👋 **Комбайн v5.2 MULTI-MARKET (Изолированные базы FunPay / Playerok) запущен!**\n"
             f"🤖 Бот для покупателей: `@{BOT_USERNAME}`\n\n"
-            f"• Коды **FunPay** (🟢) и **Playerok** (🔵) теперь разделены и никогда не пересекаются.\n"
-            f"• Чтобы сбросить тестовый пин-код: `/reset КОД`",
+            f"• Заказы FunPay и Playerok учитываются раздельно.\n"
+            f"• Автовыдача остаётся отключённой до завершения проверок.",
             reply_markup=build_admin_keyboard(),
             parse_mode="Markdown"
         )
     else:
         bot.send_message(
             message.chat.id,
-            "👋 **Добро пожаловать в магазин автоматической выдачи карточек Steam 24/7!**\n\n"
-            "📦 **Чтобы получить ваши карточки за 10 секунд:**\n"
-            "1️⃣ Отправьте сюда ваш **Пин-код** (начинается на `SET...`), полученный после оплаты.\n"
-            "2️⃣ Отправьте вашу **Трейд-ссылку Steam** (вида `.../tradeoffer/new/?partner=...&token=...`).\n\n"
-            "⚠️ *Внимание: обычная ссылка на профиль (`/profiles/...`) не подходит — нужна именно ссылка на обмен!*",
+            "👋 **Добро пожаловать!**\n\n"
+            "По вопросам заказа используй чат площадки, на которой была совершена покупка.\n"
+            "Если продавец запросил трейд-ссылку Steam, отправляй именно ссылку на обмен, а не ссылку на профиль.",
             reply_markup=build_customer_keyboard(),
             parse_mode="Markdown"
         )
@@ -1915,13 +1992,33 @@ def funpay_release_cmd(message):
         if record.get("status") == "delivered":
             bot.send_message(message.chat.id, "❌ Нельзя снять резерв с уже выданного заказа.")
             return
-        restored = restore_reservation_to_cache(record.get("reservation"))
+        reservation = record.get("reservation")
+        if reservation:
+            restored = restore_reservation_to_cache(reservation)
+            if not restored:
+                # Never erase the only reservation journal when stock restoration fails.
+                bot.send_message(
+                    message.chat.id,
+                    "❌ Резерв не снят: запись неполная или склад не удалось восстановить. "
+                    "Заказ и резерв сохранены для ручной проверки."
+                )
+                return
+        else:
+            restored = False
+
         record["reservation"] = None
         record["status"] = "cancelled"
         record["updated_at"] = int(time.time())
-        record.setdefault("notes", []).append("Резерв снят администратором через /fprelease.")
+        record.setdefault("notes", []).append(
+            "Резерв снят администратором через /fprelease."
+            if restored else "Заказ отменён администратором; активного резерва не было."
+        )
         save_json(FP_ORDERS_FILE, data)
-    bot.send_message(message.chat.id, "✅ Резерв снят." if restored else "✅ Заказ помечен отмененным; активного резерва не было.")
+    bot.send_message(
+        message.chat.id,
+        "✅ Резерв снят и карточки возвращены на склад."
+        if restored else "✅ Заказ помечен отменённым; активного резерва не было."
+    )
 
 @bot.message_handler(func=lambda m: m.text == "🔗 Где взять трейд-ссылку?")
 def customer_help_tradeurl(message):
@@ -1954,14 +2051,39 @@ def handle_toggle_autostart(message):
     _, msg = toggle_autostart()
     bot.send_message(message.chat.id, msg, reply_markup=build_admin_keyboard())
 
+@bot.message_handler(func=lambda m: m.text == "🔑 Ключ FunPay: задан 🟢" or m.text == "🔑 Ключ FunPay: НЕ задан 🔴")
+def show_funpay_key_status(message):
+    db = load_json(DB_FILE, {"admin_id": None, "vouchers": {}})
+    if message.chat.id != db.get("admin_id") or message.from_user.id != db.get("admin_id"):
+        return
+    config = load_json(FP_CONFIG_FILE, {})
+    key = str(config.get("golden_key", "")).strip()
+    if key:
+        masked = key[:4] + "…" + key[-4:] if len(key) > 10 else "••••••"
+        status = f"🟢 Ключ FunPay сохранён: `{masked}`"
+    else:
+        status = "🔴 Ключ FunPay не задан."
+    bot.send_message(
+        message.chat.id,
+        f"{status}\n\nЧтобы задать или заменить ключ, отправь команду:\n`/fp ТВОЙ_GOLDEN_KEY`\n\nПолный ключ не показывается в панели.",
+        parse_mode="Markdown",
+        reply_markup=build_admin_keyboard()
+    )
+
 @bot.message_handler(commands=["fp"])
 def set_fp_key(message):
     db = load_json(DB_FILE, {"admin_id": None, "vouchers": {}})
-    if message.chat.id != db["admin_id"]:
+    if message.chat.id != db.get("admin_id") or message.from_user.id != db.get("admin_id"):
         return
     parts = message.text.split(maxsplit=1)
     if len(parts) < 2:
-        bot.send_message(message.chat.id, "⚠️ Напиши ключ через пробел: `/fp твой_golden_key`", parse_mode="Markdown")
+        config = load_json(FP_CONFIG_FILE, {})
+        key = str(config.get("golden_key", "")).strip()
+        if key:
+            masked = key[:4] + "…" + key[-4:] if len(key) > 10 else "••••••"
+            bot.send_message(message.chat.id, f"🟢 Ключ FunPay уже сохранён: `{masked}`\nДля замены: `/fp ТВОЙ_GOLDEN_KEY`", parse_mode="Markdown")
+        else:
+            bot.send_message(message.chat.id, "🔴 Ключ FunPay не задан. Отправь: `/fp ТВОЙ_GOLDEN_KEY`", parse_mode="Markdown")
         return
     key = parts[1].strip()
     config = load_json(FP_CONFIG_FILE, {})
@@ -1971,7 +2093,7 @@ def set_fp_key(message):
     # Buyers are never directed to Telegram or an external file-hosting service.
     config["delivery_input_mode"] = "both"
     config["allow_chat_trade_url"] = True
-    config["auto_delivery_funpay"] = True
+    config.setdefault("auto_delivery_funpay", False)
     config["funpay_workflow_version"] = 2
     save_json(FP_CONFIG_FILE, config)
     bot.send_message(message.chat.id, "⏳ Проверяю ключ `golden_key` на FunPay...", parse_mode="Markdown")
@@ -2042,6 +2164,28 @@ def build_funpay_dashboard_markup():
     )
     return markup
 
+
+@bot.message_handler(func=lambda m: m.text in {"🚦 Автовыдача: ВКЛ 🟢", "🚦 Автовыдача: ВЫКЛ 🔴"})
+def toggle_funpay_auto_delivery(message):
+    db = load_json(DB_FILE, {"admin_id": None, "vouchers": {}})
+    if message.chat.id != db.get("admin_id") or message.from_user.id != db.get("admin_id"):
+        return
+    cfg = load_json(FP_CONFIG_FILE, {})
+    cfg["auto_delivery_funpay"] = not (cfg.get("auto_delivery_funpay", False) is True)
+    save_json(FP_CONFIG_FILE, cfg)
+    state = "ВКЛЮЧЕНА" if cfg["auto_delivery_funpay"] else "ВЫКЛЮЧЕНА"
+    bot.send_message(message.chat.id, f"🚦 Автовыдача FunPay {state}.", reply_markup=build_admin_keyboard())
+
+@bot.message_handler(func=lambda m: m.text in {"📨 Приём ссылок: ВКЛ 🟢", "📨 Приём ссылок: ВЫКЛ 🔴"})
+def toggle_funpay_link_input(message):
+    db = load_json(DB_FILE, {"admin_id": None, "vouchers": {}})
+    if message.chat.id != db.get("admin_id") or message.from_user.id != db.get("admin_id"):
+        return
+    cfg = load_json(FP_CONFIG_FILE, {})
+    cfg["allow_chat_trade_url"] = not (cfg.get("allow_chat_trade_url", True) is True)
+    save_json(FP_CONFIG_FILE, cfg)
+    state = "ВКЛЮЧЁН" if cfg["allow_chat_trade_url"] else "ВЫКЛЮЧЕН"
+    bot.send_message(message.chat.id, f"📨 Приём ссылок из чата FunPay {state}.", reply_markup=build_admin_keyboard())
 
 @bot.message_handler(func=lambda m: m.text == "📋 Панель FunPay — сводка")
 def show_funpay_dashboard(message):
@@ -2249,8 +2393,55 @@ def gen_codes_formatted(message):
 
 @bot.message_handler(func=lambda m: True)
 def handle_all_messages(message):
+    global restart_requested
     text = (message.text or "").strip()
     db = load_json(DB_FILE, {"admin_id": None, "vouchers": {}})
+
+    # Admin-only Steam login flow. Passwords are never intentionally persisted or logged.
+    if message.chat.id == db.get("admin_id") and message.from_user and message.from_user.id == db.get("admin_id") and message.chat.type == "private":
+        if message.chat.id in pending_steam_password_admin:
+            if text == "/cancel":
+                pending_steam_password_admin.discard(message.chat.id)
+                bot.send_message(message.chat.id, "Авторизация отменена.", reply_markup=build_admin_keyboard())
+                return
+            pending_steam_password_admin.discard(message.chat.id)
+            try:
+                bot.delete_message(message.chat.id, message.message_id)
+            except Exception:
+                logging.info("Could not delete Steam password message from Telegram chat.")
+            status_msg = bot.send_message(message.chat.id, "⏳ Проверяю пароль и подтверждение Steam Guard. Сообщение с паролем удалено, если Telegram разрешил удаление.")
+            password_once = text
+            try:
+                session_value, auth_error = get_steam_session(force_new=True, password_override=password_once)
+            finally:
+                password_once = ""
+            try:
+                bot.delete_message(message.chat.id, status_msg.message_id)
+            except Exception:
+                pass
+            if session_value:
+                bot.send_message(message.chat.id, "✅ Steam авторизован. Сессия сохранена локально; при обычном перезапуске пароль повторно вводить не потребуется.", reply_markup=build_admin_keyboard())
+            else:
+                bot.send_message(message.chat.id, "❌ " + (auth_error or "Авторизация не завершена.") + "\nПодтверди запрос в Steam Guard, если он появился, затем попробуй снова.", reply_markup=build_admin_keyboard())
+            return
+        if text == "🔐 Авторизация Steam":
+            sess = load_json(SESSION_FILE, {})
+            valid = bool(sess.get("steamLoginSecure") and time.time() - sess.get("timestamp", 0) < 43200)
+            markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+            markup.add("🔑 Войти в Steam", "📡 Статус Steam")
+            markup.add("⬅️ Назад")
+            bot.send_message(message.chat.id, "🔐 <b>Авторизация Steam</b>\nСессия: " + ("действует по локальному таймеру" if valid else "нет действующей локальной сессии") + "\nПароль запрашивается только по команде входа. Не отправляй пароль в группы; бот попробует удалить сообщение сразу после получения. Удаление не гарантировано.", reply_markup=markup, parse_mode="HTML")
+            return
+        if text == "📡 Статус Steam":
+            sess = load_json(SESSION_FILE, {})
+            valid = bool(sess.get("steamLoginSecure") and time.time() - sess.get("timestamp", 0) < 43200)
+            asf_ok, _ = asf_command("status")
+            bot.send_message(message.chat.id, "Steam-сессия: " + ("по таймеру активна" if valid else "отсутствует или устарела") + "\nЛогин задан: " + ("да" if STEAM_LOGIN else "нет") + "\nASF: " + ("доступен" if asf_ok else "не отвечает/не запущен"), reply_markup=build_admin_keyboard())
+            return
+        if text == "🔑 Войти в Steam":
+            pending_steam_password_admin.add(message.chat.id)
+            bot.send_message(message.chat.id, "Отправь пароль Steam следующим сообщением в личный чат. Бот не запишет его в файл или лог и попробует удалить сообщение сразу. Если передумал — отправь /cancel. Учти: сообщение проходит через Telegram, поэтому локальная консоль безопаснее.")
+            return
 
     # Admin navigation is handled here so all existing actions can reuse
     # build_admin_keyboard() and return to the currently open submenu.
@@ -2279,15 +2470,40 @@ def handle_all_messages(message):
         if text == "🔄 Проверить соединение FunPay":
             bot.send_message(message.chat.id, "Статус подключения отображается в сводке FunPay. Обновление состояния выполняется фоновым монитором.", reply_markup=build_admin_keyboard())
             return
+        if text == "🔁 Перезапустить бота":
+            bot.send_message(message.chat.id, "♻️ Перезапускаю Telegram-бота. Windows запустит его снова.")
+            restart_requested = True
+            threading.Thread(target=lambda: (time.sleep(1), bot.stop_polling()), daemon=True).start()
+            return
         if text == "🔄 Проверить состояние бота":
             cfg = load_json(FP_CONFIG_FILE, {})
             playerok_configured = bool(os.getenv("PLAYEROK_TOKEN", "").strip())
+            steam_session = load_json(SESSION_FILE, {})
+            steam_session_age = time.time() - float(steam_session.get("timestamp", 0) or 0)
+            steam_session_valid = bool(steam_session.get("steamLoginSecure")) and 0 <= steam_session_age < 43200
+            try:
+                cache_age = time.time() - os.path.getmtime(CACHE_FILE)
+                cache_status = f"обновлён {int(cache_age // 60)} мин. назад"
+            except OSError:
+                cache_status = "файл отсутствует"
+            if steam_session_valid:
+                steam_status = "свежая по локальному таймеру; серверная проверка не выполнялась"
+            elif steam_session.get("steamLoginSecure"):
+                steam_status = "устарела по локальному таймеру; нужна повторная авторизация"
+            else:
+                steam_status = "не найдена; нужна авторизация"
             diagnostics = (
-                "🔎 <b>Диагностика</b>\\n"
-                f"FunPay: {'ключ настроен' if str(cfg.get('golden_key', '')).strip() else 'ключ не задан'}\\n"
-                f"Playerok: {'токен задан' if playerok_configured else 'не настроен'}\\n"
-                f"Автозапуск Windows: {'включён' if is_autostart_enabled() else 'выключен'}\\n"
-                "Автовыдача FunPay: приостановлена защитой модерации.\\n"
+                "🔎 <b>Диагностика</b>\n"
+                f"Steam: {steam_status}; "
+                f"логин {'задан' if STEAM_LOGIN else 'не задан'}, ID {'задан' if STEAM_ID else 'не задан'}\n"
+                f"Кэш склада: {cache_status}\n"
+                f"FunPay: {'онлайн' if fp_state.get('online') else 'не подтверждён'}; "
+                f"{'ключ настроен' if str(cfg.get('golden_key', '')).strip() else 'ключ не задан'}\n"
+                f"Playerok: {'токен задан' if playerok_configured else 'не настроен'}\n"
+                f"Автозапуск Windows: {'включён' if is_autostart_enabled() else 'выключен'}\n"
+                f"Автоподнятие лотов: {fp_state.get('last_raise', 'Нет данных')}\n"
+                f"Приём Steam trade-ссылок в чате FunPay: {'включён' if cfg.get('allow_chat_trade_url', True) is True else 'выключен'}\n"
+                f"Автовыдача FunPay: {'включена настройкой' if cfg.get('auto_delivery_funpay', False) is True else 'выключена настройкой'}; фактическая выдача может быть ограничена защитой модерации.\n"
                 "Автовыдача Playerok: выключена."
             )
             bot.send_message(message.chat.id, diagnostics, reply_markup=build_admin_keyboard(), parse_mode="HTML")
@@ -2435,6 +2651,8 @@ try:
     threading.Thread(target=funpay_background_worker, daemon=True).start()
     start_playerok_monitor()
     bot.infinity_polling()
+    if restart_requested:
+        raise SystemExit(42)
 finally:
     import ctypes
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)

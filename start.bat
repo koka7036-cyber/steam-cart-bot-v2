@@ -1,35 +1,82 @@
 @echo off
+setlocal EnableExtensions EnableDelayedExpansion
 chcp 65001 >nul
-echo [UPDATE] Проверяю GitHub перед запуском бота...
-powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "C:\CardBot\update_bot.ps1"
-if errorlevel 1 echo [WARN] Обновление пропущено; запускается сохранённая версия.
+title Steam Cards Bot Launcher
+cd /d "%~dp0"
+set "LOG=%~dp0launcher_start.log"
+> "%LOG%" echo [%date% %time%] Launcher started from "%~dp0"
 
-title Управление фермой: ASF + Steam Курьер + FunPay 24/7
-
-echo ===================================================
-echo [1/2] Проверка запуска ArchiSteamFarm (ASF)...
-echo ===================================================
-tasklist /FI "IMAGENAME eq ArchiSteamFarm.exe" 2>NUL | find /I /N "ArchiSteamFarm.exe">NUL
-if "%ERRORLEVEL%"=="0" (
-    echo [OK] ASF уже работает! Повторный запуск не требуется.
-) else (
-    echo [СТАРТ] Запускаю ASF в отдельном окне...
-    start "ArchiSteamFarm" /D "C:\CardBot\ASF-win-x64 (1)" "ArchiSteamFarm.exe"
-    echo Ждем 10 секунд, пока ASF войдет в Steam и включит IPC...
-    timeout /t 10 /nobreak >nul
-)
-
+echo ==================================================
+echo Steam Cards Bot Launcher
+echo ==================================================
 echo.
-echo ===================================================
-echo [2/2] Запуск единого бота (Steam + FunPay 24/7)...
-echo ===================================================
-:loop
-powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "C:\CardBot\run_bot.ps1"
-if errorlevel 23 (
-    echo [INFO] Бот уже запущен; повторный запуск пропущен.
-    exit /b 0
+echo Log: "%LOG%"
+echo.
+echo Checking for bot updates...
+if exist "%~dp0update_bot.ps1" (
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0update_bot.ps1"
+  if errorlevel 1 (
+    echo [WARN] Update failed; continuing with the current installed version.
+    >> "%LOG%" echo [%date% %time%] Update failed; continuing with current version.
+  )
+) else (
+  echo [WARN] update_bot.ps1 missing; automatic updates unavailable.
+)
+echo.
+
+REM Delayed expansion prevents parentheses in paths such as "ASF-win-x64 (1)" breaking CMD blocks.
+set "ASF_EXE="
+set "CACHE=%~dp0.asf_path.txt"
+if defined CARD_BOT_ASF_DIR if exist "%CARD_BOT_ASF_DIR%\ArchiSteamFarm.exe" set "ASF_EXE=%CARD_BOT_ASF_DIR%\ArchiSteamFarm.exe"
+if not defined ASF_EXE if exist "%CACHE%" set /p ASF_EXE=<"%CACHE%"
+if defined ASF_EXE if not exist "!ASF_EXE!" set "ASF_EXE="
+
+if not defined ASF_EXE (
+  echo Searching for ArchiSteamFarm.exe...
+  >> "%LOG%" echo [%date% %time%] Searching for ASF with PowerShell.
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='SilentlyContinue'; $roots=@([Environment]::GetFolderPath('Desktop'),(Join-Path $env:USERPROFILE 'Downloads'),$env:OneDrive,'C:\CardBot',(Get-Location).Path); $roots=$roots|Where-Object{$_ -and (Test-Path -LiteralPath $_)}|Select-Object -Unique; foreach($root in $roots){$hit=Get-ChildItem -LiteralPath $root -Filter 'ArchiSteamFarm.exe' -File -Recurse -ErrorAction SilentlyContinue|Select-Object -First 1; if($hit){[IO.File]::WriteAllText((Join-Path $env:TEMP 'cardbot_asf_path.txt'),$hit.FullName,[Text.Encoding]::ASCII); exit 0}}; [IO.File]::WriteAllText((Join-Path $env:TEMP 'cardbot_asf_path.txt'),'',[Text.Encoding]::ASCII); exit 1"
+  if exist "%TEMP%\cardbot_asf_path.txt" set /p ASF_EXE=<"%TEMP%\cardbot_asf_path.txt"
+  del "%TEMP%\cardbot_asf_path.txt" >nul 2>&1
 )
 
-echo Бот перезапускается через 5 секунд...
-timeout /t 5 /nobreak >nul
-goto loop
+if not defined ASF_EXE if not defined CARD_BOT_NONINTERACTIVE (
+  echo ASF was not found automatically.
+  echo Select ArchiSteamFarm.exe, or cancel to continue without ASF.
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Add-Type -AssemblyName System.Windows.Forms; $d=New-Object System.Windows.Forms.OpenFileDialog; $d.Title='Select ArchiSteamFarm.exe (Cancel to continue without ASF)'; $d.Filter='ArchiSteamFarm.exe|ArchiSteamFarm.exe|Executable files (*.exe)|*.exe'; $p=''; if($d.ShowDialog() -eq 'OK'){$p=$d.FileName}; [IO.File]::WriteAllText((Join-Path $env:TEMP 'cardbot_asf_path.txt'),$p,[Text.Encoding]::ASCII)"
+  if exist "%TEMP%\cardbot_asf_path.txt" set /p ASF_EXE=<"%TEMP%\cardbot_asf_path.txt"
+  del "%TEMP%\cardbot_asf_path.txt" >nul 2>&1
+) else if not defined ASF_EXE (
+  >> "%LOG%" echo [%date% %time%] Non-interactive startup: skipping ASF file picker.
+)
+
+if defined ASF_EXE if exist "!ASF_EXE!" (
+  echo [INFO] ASF found: "!ASF_EXE!"
+  >> "%LOG%" echo [%date% %time%] ASF found: "!ASF_EXE!"
+  >"!CACHE!" echo !ASF_EXE!
+  tasklist /FI "IMAGENAME eq ArchiSteamFarm.exe" 2>NUL | find /I "ArchiSteamFarm.exe" >NUL
+  if errorlevel 1 (
+    for %%I in ("!ASF_EXE!") do start "ArchiSteamFarm" /D "%%~dpI" "!ASF_EXE!"
+    timeout /t 2 /nobreak >nul
+  ) else echo [INFO] ASF is already running.
+) else (
+  echo [WARN] ASF not found/selected. Continuing without ASF.
+  >> "%LOG%" echo [%date% %time%] ASF not found/selected; bot-only startup.
+)
+
+if not exist "%~dp0run_bot.ps1" (
+  echo [ERROR] run_bot.ps1 not found beside start.bat.
+  >> "%LOG%" echo [%date% %time%] ERROR: run_bot.ps1 missing.
+  pause
+  exit /b 2
+)
+echo Starting Telegram bot...
+>> "%LOG%" echo [%date% %time%] Starting run_bot.ps1
+if defined CARD_BOT_NONINTERACTIVE (
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0run_bot.ps1"
+) else (
+  powershell.exe -NoProfile -NoExit -ExecutionPolicy Bypass -File "%~dp0run_bot.ps1"
+)
+echo.
+echo Launcher finished. Log: "%LOG%"
+if not defined CARD_BOT_NONINTERACTIVE pause
+endlocal

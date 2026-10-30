@@ -6,6 +6,7 @@ keep one reservation per order.
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import html
 import re
@@ -16,6 +17,95 @@ from urllib.parse import parse_qs, urljoin, urlparse
 
 OPEN_STATUSES = {"awaiting_input", "input_received", "reserved", "review", "retry_required"}
 
+def count_cancelled_orders(orders) -> int:
+    """Count cancelled/refunded FunPay orders once, including legacy refund flags."""
+    if isinstance(orders, dict):
+        values = orders.values()
+    elif isinstance(orders, (list, tuple)):
+        values = orders
+    else:
+        return 0
+    return sum(
+        1 for order in values
+        if isinstance(order, dict) and (
+            order.get("status") in {"cancelled", "refunded", "refunded_cancelled"}
+            or order.get("funpay_refunded") is True
+        )
+    )
+
+
+
+
+def restore_reserved_assets(cache: dict, reservation: dict) -> dict | None:
+    """Return a safely restored cache, or None without mutating input on invalid data.
+
+    The reservation must contain unique asset IDs and a matching location for
+    every ID. Validation completes before a copy is changed, so malformed data
+    can never partially restore stock.
+    """
+    if not isinstance(cache, dict) or not isinstance(reservation, dict):
+        return None
+    games = cache.get("games")
+    if not isinstance(games, dict) or not games:
+        return None
+
+    asset_ids = reservation.get("asset_ids")
+    locations = reservation.get("asset_locations")
+    if not isinstance(asset_ids, list) or not asset_ids:
+        return None
+    if not isinstance(locations, list) or not locations or len(asset_ids) != len(locations):
+        return None
+
+    normalized_ids = []
+    for asset_id in asset_ids:
+        value = str(asset_id)
+        if not value.isdigit() or value in normalized_ids:
+            return None
+        normalized_ids.append(value)
+
+    normalized_locations = []
+    location_ids = []
+    for item in locations:
+        if not isinstance(item, dict):
+            return None
+        game = item.get("game")
+        card = item.get("card")
+        asset_id = str(item.get("asset_id", ""))
+        if not isinstance(game, str) or not game.strip():
+            return None
+        if not isinstance(card, str) or not card.strip():
+            return None
+        if not asset_id.isdigit() or asset_id in location_ids:
+            return None
+        location_ids.append(asset_id)
+        normalized_locations.append({"game": game, "card": card, "asset_id": asset_id})
+
+    if set(normalized_ids) != set(location_ids):
+        return None
+
+    restored = copy.deepcopy(cache)
+    restored_games = restored["games"]
+    for item in normalized_locations:
+        game_cards = restored_games.get(item["game"], {})
+        if item["game"] in restored_games and not isinstance(game_cards, dict):
+            return None
+        if item["card"] in game_cards and not isinstance(game_cards[item["card"]], list):
+            return None
+
+    for item in normalized_locations:
+        game_cards = restored_games.setdefault(item["game"], {})
+        card_assets = game_cards.setdefault(item["card"], [])
+        if item["asset_id"] not in [str(value) for value in card_assets]:
+            card_assets.append(item["asset_id"])
+
+    restored["total_cards"] = sum(
+        len(asset_ids)
+        for cards in restored_games.values()
+        if isinstance(cards, dict)
+        for asset_ids in cards.values()
+        if isinstance(asset_ids, list)
+    )
+    return restored
 
 
 STEAM_TRADE_URL_RE = re.compile(
@@ -172,6 +262,18 @@ class _LastChatMessageParser(HTMLParser):
     def handle_comment(self, data):
         if self._parts is not None:
             self._parts.append(f"<!--{data}-->")
+
+
+
+def extract_chat_message_fragments(html_document: str) -> list[str]:
+    """Return all top-level chat message wrappers in chronological page order."""
+    parser = _LastChatMessageParser()
+    try:
+        parser.feed(html_document or "")
+        parser.close()
+    except Exception:
+        return []
+    return list(parser.messages)
 
 
 def extract_last_chat_message_fragment(html_document: str) -> str | None:
@@ -399,6 +501,24 @@ def payment_key(node_id: str, text: str) -> str:
 
 
 
+
+def funpay_input_signature(node_id: str, sender_name: str, message_fragment: str, message_text: str = "") -> str:
+    """Stable, non-reversible fingerprint for one incoming chat message.
+
+    Include the rendered message fragment (which normally includes sender/time metadata)
+    so the same URL sent in a new message is distinct, while polling the same message
+    does not re-trigger delivery. The original URL is never stored by this helper.
+    """
+    raw_fragment = message_fragment or ""
+    visible_fragment = html.unescape(re.sub(r"<[^>]+>", " ", raw_fragment))
+    visible_fragment = re.sub(r"\s+", " ", visible_fragment).strip()
+    text = re.sub(r"\s+", " ", (message_text or "").strip())
+    stable_id_match = re.search(r"\bdata-(?:message-)?id\s*=\s*(['\"])(.*?)\1", raw_fragment, re.IGNORECASE)
+    stable_id = stable_id_match.group(2) if stable_id_match else ""
+    digest = hashlib.sha256(f"{node_id}|{sender_name}|{stable_id}|{visible_fragment}|{text}".encode("utf-8", errors="replace")).hexdigest()
+    return digest
+
+
 def message_signature(sender_name: str, preview: str) -> str:
     """Create a stable signature without storing the message preview itself."""
     source = f"{sender_name or ''}:{preview or ''}".encode("utf-8", errors="replace")
@@ -435,6 +555,22 @@ def register_payment(orders: dict, *, node_id: str, buyer: str, text: str,
     }
     orders[key] = record
     return record, True
+
+
+
+def open_orders_for_chat(orders: dict, node_id: str) -> list[dict]:
+    """Return all open orders for a chat in stable oldest-first order.
+
+    The caller must not guess between multiple candidates; this list is used to
+    present an explicit admin disambiguation choice.
+    """
+    candidates = [
+        item for item in orders.values()
+        if isinstance(item, dict)
+        and str(item.get("node_id")) == str(node_id)
+        and item.get("status") in OPEN_STATUSES
+    ]
+    return sorted(candidates, key=lambda item: (int(item.get("created_at", 0) or 0), str(item.get("key", ""))))
 
 
 def find_open_order_for_chat(orders: dict, node_id: str) -> dict | None:

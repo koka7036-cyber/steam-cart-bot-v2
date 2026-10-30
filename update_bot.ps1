@@ -1,99 +1,149 @@
+param(
+    [switch]$Force
+)
 $ErrorActionPreference = 'Stop'
-$repo = 'C:\CardBot_repo'
-$live = 'C:\CardBot'
-$log = Join-Path $live 'auto_update.log'
-$marker = Join-Path $live 'auto_update_commit.txt'
-$requirementsSnapshot = Join-Path $live 'requirements.installed.txt'
-$deployFiles = @('bot.py', 'order_parser.py', 'funpay_orders.py', 'sales_analytics.py', 'playerok_orders.py', 'playerok_monitor.py', 'requirements-playerok.txt', 'configure_playerok.ps1', 'configure_playerok.bat', 'toggle_autostart_task.ps1', 'install_autostart.ps1', 'update_bot.ps1', 'run_bot.ps1', 'backup_bot.ps1')
-
-function Write-Log([string]$Message) {
-    $line = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $Message"
-    Add-Content -LiteralPath $log -Value $line -Encoding UTF8
+$Repo = 'koka7036-cyber/steam-cart-bot-v2'
+$Branch = 'main'
+$Root = [IO.Path]::GetFullPath($PSScriptRoot)
+$Log = Join-Path $Root 'update_bot.log'
+$Marker = Join-Path $Root '.bot_update_commit.txt'
+$Stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+$Backup = Join-Path $Root ('backups\update_' + $Stamp)
+function Log([string]$Message) {
+    $line = '[' + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + '] ' + $Message
+    Add-Content -LiteralPath $Log -Value $line -Encoding UTF8
+    Write-Host $line
 }
-
 try {
-    if (-not (Test-Path -LiteralPath (Join-Path $repo '.git'))) { throw 'Клон GitHub не найден.' }
-    if (-not (Test-Path -LiteralPath (Join-Path $live 'bot.py'))) { throw 'Рабочий bot.py не найден.' }
-
-    $null = & git -C $repo fetch --quiet origin '+refs/heads/main:refs/remotes/origin/main' 2>&1
-    if ($LASTEXITCODE -ne 0) { throw 'Не удалось получить обновления с GitHub. Рабочая версия оставлена без изменений.' }
-
-    $commit = (& git -C $repo rev-parse 'origin/main^{commit}' 2>$null).Trim()
-    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($commit)) { throw 'Не удалось определить актуальную версию origin/main.' }
-
-    $deployedCommit = ''
-    if (Test-Path -LiteralPath $marker) { $deployedCommit = [System.IO.File]::ReadAllText($marker).Trim() }
-    if ($deployedCommit -eq $commit) {
-        $missingFiles = @($deployFiles | Where-Object { -not (Test-Path -LiteralPath (Join-Path $live $_) -PathType Leaf) })
-        if ($missingFiles.Count -eq 0) { Write-Log "Без изменений; активная версия $commit."; exit 0 }
-        Write-Log ("Восстановление неполного развёртывания версии " + $commit + "; отсутствуют: " + ($missingFiles -join ', '))
+    Log "Checking updates for $Repo ($Branch)"
+    # Never replace Python files while a bot process is running.
+    $botProcesses = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+        $_.Name -match '^python(w)?\.exe$' -and $_.CommandLine -and $_.CommandLine -match 'bot\.py'
+    })
+    if ($botProcesses.Count -gt 0 -and -not $Force) {
+        Log 'Bot process appears to be running; update skipped to avoid replacing active files.'
+        exit 0
     }
-
-    $sourceRoot = Join-Path $env:TEMP ('CardBotSource_' + [guid]::NewGuid().ToString('N'))
-    $archive = Join-Path $env:TEMP ('CardBotSource_' + [guid]::NewGuid().ToString('N') + '.zip')
-    $archivePaths = @($deployFiles) + @('requirements.txt')
-    $archiveArgs = @('-C', $repo, 'archive', '--format=zip', "--output=$archive", $commit) + $archivePaths
-    $null = & git @archiveArgs 2>&1
-    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $archive)) { throw 'Не удалось подготовить архив файлов GitHub. Рабочая версия оставлена без изменений.' }
-    Expand-Archive -LiteralPath $archive -DestinationPath $sourceRoot -Force
-    Remove-Item -LiteralPath $archive -Force
-
-    foreach ($name in $archivePaths) {
-        if (-not (Test-Path -LiteralPath (Join-Path $sourceRoot $name) -PathType Leaf)) { throw "В удалённой версии отсутствует $name. Рабочая версия оставлена без изменений." }
+    $headers = @{ 'User-Agent' = 'SteamCardsBot-Updater'; 'Accept' = 'application/vnd.github+json' }
+    # Private repository access: prefer environment token, otherwise use a DPAPI-protected
+    # token file tied to this Windows user. First run prompts once; the token is never logged.
+    $tokenFile = Join-Path $Root '.github_token.dpapi'
+    $githubToken = ''
+    if ($env:GH_TOKEN) { $githubToken = $env:GH_TOKEN }
+    elseif ($env:GITHUB_TOKEN) { $githubToken = $env:GITHUB_TOKEN }
+    elseif (Test-Path -LiteralPath $tokenFile) {
+        try {
+            $secureToken = Get-Content -LiteralPath $tokenFile -Raw | ConvertTo-SecureString
+            $ptr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureToken)
+            try { $githubToken = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr) }
+            finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr) }
+        } catch {
+            # DPAPI credentials are bound to the Windows user/profile that created them.
+            # Do not abort and do not delete the unreadable file automatically: fall through
+            # to the hidden prompt below so the user can re-enter a read-only token safely.
+            $githubToken = ''
+            Log 'Saved GitHub credential could not be decrypted for this Windows user; requesting token again. The existing credential file is preserved until a replacement is entered.'
+        }
     }
-
-    $newRequirements = [System.IO.File]::ReadAllText((Join-Path $sourceRoot 'requirements.txt'))
-    if (Test-Path -LiteralPath $requirementsSnapshot) {
-        $installedRequirements = [System.IO.File]::ReadAllText($requirementsSnapshot)
-        if ($newRequirements -ne $installedRequirements) { throw 'Список библиотек изменился. Код не обновлялся; требуется отдельное обновление библиотек.' }
-    } else {
-        $utf8 = New-Object System.Text.UTF8Encoding -ArgumentList $false
-        [System.IO.File]::WriteAllText($requirementsSnapshot, $newRequirements, $utf8)
+    if ([string]::IsNullOrWhiteSpace($githubToken)) {
+        Write-Host ''
+        Write-Host 'This GitHub repository is private. A read-only GitHub token is required for automatic updates.'
+        Write-Host 'Create a fine-grained token in your browser with access only to this repository and Contents: Read-only.'
+        $secureToken = Read-Host 'Paste GitHub token (input hidden)' -AsSecureString
+        if (-not $secureToken -or $secureToken.Length -eq 0) {
+            throw 'No GitHub token supplied. No files were changed.'
+        }
+        $ptr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureToken)
+        try { $githubToken = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr) }
+        finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr) }
+        # ConvertTo-SecureString/ConvertFrom-SecureString uses Windows DPAPI by default.
+        $secureToken | ConvertFrom-SecureString | Set-Content -LiteralPath $tokenFile -Encoding ASCII
     }
-
-    $botText = [System.IO.File]::ReadAllText((Join-Path $sourceRoot 'bot.py'))
-    if ($botText -notmatch '(?m)^\s*import\s+threading\b' -or $botText -notmatch '(?m)^\s*def\s+funpay_background_worker\s*\(' -or $botText -notmatch '(?m)^\s*bot\s*=\s*telebot\.TeleBot\s*\(') {
-        throw 'Структура bot.py изменилась; обновление остановлено для ручной проверки.'
-    }
-    if ($botText -notmatch '(?m)^\s*threading\.Thread\s*\(\s*target\s*=\s*funpay_background_worker') { $botText = $botText.TrimEnd() + [Environment]::NewLine + 'threading.Thread(target=funpay_background_worker, daemon=True).start()' + [Environment]::NewLine }
-    if ($botText -notmatch '(?m)^\s*bot\.(infinity_polling|polling)\s*\(') { $botText = $botText.TrimEnd() + [Environment]::NewLine + 'bot.infinity_polling()' + [Environment]::NewLine }
-
-    $backupScript = Join-Path $live 'backup_bot.ps1'
-    if (-not (Test-Path -LiteralPath $backupScript)) { throw 'Локальный backup_bot.ps1 не найден; обновление остановлено.' }
-    & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $backupScript -BotRoot $live | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw 'Не удалось создать локальную резервную копию; обновление отменено.' }
-
-    $stage = Join-Path $env:TEMP ('CardBotUpdate_' + [guid]::NewGuid().ToString('N'))
-    New-Item -ItemType Directory -Path $stage | Out-Null
-    $utf8 = New-Object System.Text.UTF8Encoding -ArgumentList $false
-    $utf8Bom = New-Object System.Text.UTF8Encoding -ArgumentList $true
-    foreach ($name in $deployFiles) {
-        $source = Join-Path $sourceRoot $name
-        $target = Join-Path $stage $name
-        if ($name -eq 'bot.py') { [System.IO.File]::WriteAllText($target, $botText, $utf8) }
-        elseif ($name.EndsWith('.ps1')) { $scriptText = [System.IO.File]::ReadAllText($source); [System.IO.File]::WriteAllText($target, $scriptText, $utf8Bom) }
-        else { Copy-Item -LiteralPath $source -Destination $target }
-    }
-
-    $backupRoot = Join-Path $live 'update_backups'
-    New-Item -ItemType Directory -Path $backupRoot -Force | Out-Null
-    $backup = Join-Path $backupRoot ((Get-Date -Format 'yyyyMMdd_HHmmss') + '_' + $commit.Substring(0, 8))
-    New-Item -ItemType Directory -Path $backup | Out-Null
-    $rollbackFiles = @($deployFiles) + @('start.bat')
-    foreach ($name in $rollbackFiles) { $source = Join-Path $live $name; if (Test-Path -LiteralPath $source -PathType Leaf) { Copy-Item -LiteralPath $source -Destination (Join-Path $backup $name) } }
-
+    $headers['Authorization'] = 'Bearer ' + $githubToken
+    # Use the commits list endpoint with the branch as a query parameter.
+    # This avoids GitHub/API gateways interpreting slashes in branch names as URL path separators.
+    $encodedBranch = [Uri]::EscapeDataString($Branch)
+    $commitUrl = "https://api.github.com/repos/$Repo/commits?sha=$encodedBranch&per_page=1"
     try {
-        foreach ($name in $deployFiles) { Copy-Item -LiteralPath (Join-Path $stage $name) -Destination (Join-Path $live $name) -Force }
-        [System.IO.File]::WriteAllText($marker, $commit, $utf8)
+        $remoteCommits = Invoke-RestMethod -Uri $commitUrl -Headers $headers -TimeoutSec 25
+        $remote = @($remoteCommits) | Select-Object -First 1
+        if (-not $remote) { throw "GitHub returned no commits for branch '$Branch'." }
     } catch {
-        foreach ($name in $rollbackFiles) { $saved = Join-Path $backup $name; if (Test-Path -LiteralPath $saved -PathType Leaf) { Copy-Item -LiteralPath $saved -Destination (Join-Path $live $name) -Force } }
-        throw
+        throw ("Не удалось прочитать commit GitHub (URL: $commitUrl). Проверь доступность репозитория/ветки и подключение. Исходная ошибка: " + $_.Exception.Message)
     }
-    Write-Log "Обновлено до $commit; код сохранён в $backup, данные — в резервной копии."
-    Write-Output "Бот обновлён до версии $commit."
-    exit 0
+    $remoteSha = [string]$remote.sha
+    if ([string]::IsNullOrWhiteSpace($remoteSha) -or $remoteSha -notmatch '^[0-9a-f]{40}$') {
+        throw 'GitHub returned an invalid commit SHA.'
+    }
+    $localSha = ''
+    if (Test-Path -LiteralPath $Marker) { $localSha = (Get-Content -LiteralPath $Marker -Raw -ErrorAction SilentlyContinue).Trim() }
+    if (-not $Force -and $localSha -eq $remoteSha) {
+        Log "Already current ($remoteSha)."
+        exit 0
+    }
+    $tempRoot = Join-Path $env:TEMP ('cardbot_update_' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $tempRoot | Out-Null
+    try {
+        $zip = Join-Path $tempRoot 'source.zip'
+        $extract = Join-Path $tempRoot 'source'
+        # Pin the archive to the exact commit whose SHA was checked above. The branch can move between API lookup and download.
+        $zipUrl = "https://codeload.github.com/$Repo/zip/$remoteSha"
+        try {
+            Invoke-WebRequest -Uri $zipUrl -OutFile $zip -Headers @{ 'User-Agent' = 'SteamCardsBot-Updater'; 'Authorization' = ('Bearer ' + $githubToken) } -TimeoutSec 90
+        } catch {
+            throw ("Не удалось скачать архив ветки с GitHub (URL: $zipUrl). Проверь доступность репозитория/ветки. Исходная ошибка: " + $_.Exception.Message)
+        }
+        Expand-Archive -LiteralPath $zip -DestinationPath $extract -Force
+        $source = Get-ChildItem -LiteralPath $extract -Directory | Select-Object -First 1
+        if (-not $source) { throw 'Downloaded archive has no source directory.' }
+        $files = @(
+            'bot.py','funpay_orders.py','order_parser.py','playerok_monitor.py','playerok_orders.py',
+            'runtime_paths.py','sales_analytics.py','run_bot.ps1','start.bat','update_bot.ps1',
+            'requirements.txt','requirements-playerok.txt','configure_playerok.bat','configure_playerok.ps1',
+            'install_autostart.ps1','setup_windows.ps1','toggle_autostart_task.ps1','repair_updater.bat'
+        )
+        $available = @($files | Where-Object { Test-Path -LiteralPath (Join-Path $source.FullName $_) })
+        if (-not ($available -contains 'bot.py') -or -not ($available -contains 'start.bat') -or -not ($available -contains 'run_bot.ps1')) {
+            throw 'Archive is missing one or more required launcher files; update aborted.'
+        }
+        # Syntax check the candidate Python file before touching the installed version.
+        $py = Get-Command py -ErrorAction SilentlyContinue
+        if ($py) {
+            & py -3 -m py_compile (Join-Path $source.FullName 'bot.py')
+            if ($LASTEXITCODE -ne 0) { throw 'Python syntax check failed; installed files were not changed.' }
+        } else { Log 'WARNING: py.exe not found; Python syntax check skipped.' }
+        New-Item -ItemType Directory -Path $Backup -Force | Out-Null
+        foreach ($relative in $available) {
+            $target = Join-Path $Root $relative
+            if (Test-Path -LiteralPath $target) {
+                $backupTarget = Join-Path $Backup $relative
+                $parent = Split-Path -Parent $backupTarget
+                if (-not (Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
+                Copy-Item -LiteralPath $target -Destination $backupTarget -Force
+            }
+        }
+        try {
+            foreach ($relative in $available) {
+                Copy-Item -LiteralPath (Join-Path $source.FullName $relative) -Destination (Join-Path $Root $relative) -Force
+            }
+            [IO.File]::WriteAllText($Marker, $remoteSha + [Environment]::NewLine, [Text.Encoding]::ASCII)
+        } catch {
+            Log "Copy failed; rolling back files from $Backup"
+            foreach ($relative in $available) {
+                $backupTarget = Join-Path $Backup $relative
+                if (Test-Path -LiteralPath $backupTarget) {
+                    Copy-Item -LiteralPath $backupTarget -Destination (Join-Path $Root $relative) -Force
+                }
+            }
+            throw
+        }
+        Log "Update installed successfully: $remoteSha"
+        Log "Backup created at: $Backup"
+    } finally {
+        if (Test-Path -LiteralPath $tempRoot) { Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue }
+    }
 } catch {
-    Write-Log "ОБНОВЛЕНИЕ ОСТАНОВЛЕНО: $($_.Exception.Message)"
-    Write-Error $_.Exception.Message
+    Log ("UPDATE FAILED: " + $_.Exception.Message)
+    Write-Host 'Update failed. The existing bot files were left in place or restored from backup.' -ForegroundColor Red
     exit 1
 }
