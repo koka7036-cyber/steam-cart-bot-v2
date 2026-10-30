@@ -287,6 +287,23 @@ def extract_last_chat_message_fragment(html_document: str) -> str | None:
     return parser.messages[-1] if parser.messages else None
 
 
+
+def extract_paid_order_events(html_document: str) -> list[tuple[str, str]]:
+    """Return authenticated system payment messages from a FunPay chat page.
+
+    Only FunPay alert/system message wrappers are accepted. Each result contains
+    the raw HTML fragment and its visible text; the caller must still validate
+    payment wording, product description and the associated chat identity.
+    """
+    events = []
+    for fragment in extract_chat_message_fragments(html_document):
+        text = html.unescape(re.sub(r"<[^>]+>", " ", fragment))
+        text = re.sub(r"\\s+", " ", text).strip()
+        if text and is_funpay_system_message(fragment):
+            events.append((fragment, text))
+    return events
+
+
 def extract_text_attachment_href(html_fragment: str, base_url: str) -> str | None:
     """Return one trusted FunPay-hosted text attachment URL from message HTML.
 
