@@ -660,7 +660,7 @@ def is_funpay_system_message(html_fragment: str) -> bool:
 def extract_order_number(text: str) -> str | None:
     """Extract a FunPay order identifier (which may contain letters)."""
     match = re.search(
-        r"(?:заказ|order)\s*[№#]?\s*([A-Z0-9]{4,24})",
+        r"(?:заказ(?:у|а|ом)?|order)\s*[№#]?\s*([A-Z0-9]{4,24})",
         text or "",
         re.IGNORECASE,
     )
