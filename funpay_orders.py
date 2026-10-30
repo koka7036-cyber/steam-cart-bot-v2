@@ -194,7 +194,7 @@ class _FunPaySystemAlertParser(HTMLParser):
     _VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
 
     def __init__(self):
-        super().__init__(convert_charrefs=False)
+        super().__init__(convert_charrefs=True)
         self._parts = None
         self._depth = 0
         self.fragments = []
@@ -275,7 +275,7 @@ class _LastChatMessageParser(HTMLParser):
     _MESSAGE_CLASSES = {"chat-msg", "chat-msg-item", "chat-msg-container", "chat-msg-wrapper"}
 
     def __init__(self):
-        super().__init__(convert_charrefs=False)
+        super().__init__(convert_charrefs=True)
         self._depth = 0
         self._parts = None
         self.messages = []
