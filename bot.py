@@ -1483,8 +1483,13 @@ def funpay_check_unread_chats():
                 continue
 
             lower_txt = full_text.lower()
-            trade_url = extract_steam_trade_url(full_text)
-            contains_trade_url = "steamcommunity.com/tradeoffer/new" in lower_txt
+            # Support both plain-text URLs and URLs represented only by an
+            # anchor href in FunPay's message HTML. The author was already verified.
+            trade_url = extract_steam_trade_url(full_text) or extract_steam_trade_url(last_message_html)
+            contains_trade_url = (
+                "steamcommunity.com/tradeoffer/new" in lower_txt
+                or "steamcommunity.com/tradeoffer/new" in last_message_html.lower()
+            )
             input_kind = "chat_trade_url"
             input_error = None
 
