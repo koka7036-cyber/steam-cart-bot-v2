@@ -3276,7 +3276,9 @@ if _instance_mutex is None:
 try:
     threading.Thread(target=funpay_background_worker, daemon=True).start()
     start_playerok_monitor()
-    bot.infinity_polling()
+    # Long-poll timeout is shorter than the HTTP read timeout so transient socket resets
+    # are treated as retriable transport errors by pyTelegramBotAPI's infinity loop.
+    bot.infinity_polling(timeout=25, request_timeout=45, skip_pending=False)
     if restart_requested:
         raise SystemExit(43 if update_restart_requested else 42)
 finally:
