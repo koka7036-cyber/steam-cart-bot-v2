@@ -194,3 +194,31 @@ def test_telegram_diagnostics_show_verified_installed_commit_marker():
     assert 'revision_text = installed_revision[:12] if installed_revision else "не определена"' in source
     updater = read_project_file("update_bot.ps1")
     assert "$Marker = Join-Path $Root '.bot_update_commit.txt'" in updater
+
+
+
+def test_funpay_chat_diagnostic_is_admin_only_and_read_only():
+    source = read_project_file("bot.py")
+    start = source.index('def funpay_chat_diagnostic_cmd(message):')
+    end = source.index('@bot.message_handler(commands=["fporders"])', start)
+    diagnostic = source[start:end]
+
+    assert '@bot.message_handler(commands=["fpdiag"])' in source
+    assert 'message.chat.type != "private"' in diagnostic
+    assert "message.from_user.id != db.get('admin_id')" in diagnostic or "message.from_user.id != db.get(" in diagnostic
+    assert 'https://funpay.com/chat/history' in diagnostic
+    assert "summarize_funpay_chat_diagnostics(" in diagnostic
+    assert "send_trade_offer(" not in diagnostic
+    assert "record_funpay_buyer_input(" not in diagnostic
+    assert "register_funpay_payment(" not in diagnostic
+    assert "register_funpay_refund(" not in diagnostic
+    assert "reserve_funpay_order(" not in diagnostic
+    assert "save_json(" not in diagnostic
+    assert "PRIVATE_SECRET" not in diagnostic
+    assert 'callback_data="fpdiag_help"' in source
+
+
+def test_funpay_dashboard_explains_text_attachment_input_mode():
+    source = read_project_file("bot.py")
+    assert '"chat_only": "💬 Чат + 📎 текстовый файл"' in source
+    assert "небольшим текстовым файлом" in source

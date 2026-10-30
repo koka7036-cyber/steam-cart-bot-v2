@@ -1023,3 +1023,75 @@ def test_extract_steam_trade_url_from_verified_funpay_anchor_href():
         "https://steamcommunity.com/tradeoffer/new/?partner=123456&token=AbCdEf12"
     )
 
+
+
+def test_funpay_diagnostic_summarizes_order_match_without_exposing_trade_url():
+    from funpay_orders import parse_funpay_history_payload, summarize_funpay_chat_diagnostics
+
+    paid = (
+        '<div class="alert alert-with-icon alert-info">'
+        'Покупатель Buyer оплатил заказ #ABCD1234: 1 полный сет карточек Steam'
+        '</div>'
+    )
+    buyer_url = (
+        '<div class="message-text"><a href="https://steamcommunity.com/tradeoffer/new/'
+        '?partner=123&token=PRIVATE_SECRET">Открыть трейд</a></div>'
+    )
+    timeline = parse_funpay_history_payload(
+        _history_payload([
+            _history_message(10, 0, paid),
+            _history_message(11, 123456789, buyer_url),
+        ]),
+        expected_chat_id="297865070",
+    )
+    orders = {
+        "fp-order-ABCD1234": {
+            "key": "fp-order-ABCD1234",
+            "funpay_order_number": "ABCD1234",
+            "node_id": "297865070",
+            "status": "reserved",
+            "sets_total": 1,
+            "reservation": {"asset_ids": ["123"]},
+        }
+    }
+
+    result = summarize_funpay_chat_diagnostics(timeline, orders, "297865070")
+
+    assert result["buyer_id"] == 123456789
+    assert result["latest"]["author_kind"] == "buyer"
+    assert result["latest_buyer_input"]["has_trade_url"] is True
+    assert result["system_events"][0]["order_status"] == "reserved"
+    assert result["system_events"][0]["order_node_matches"] is True
+    assert result["open_orders"][0]["order_number"] == "ABCD1234"
+    assert "PRIVATE_SECRET" not in repr(result)
+    assert "steamcommunity.com" not in repr(result)
+
+
+def test_funpay_diagnostic_does_not_reuse_old_buyer_url_after_latest_refund():
+    from funpay_orders import parse_funpay_history_payload, summarize_funpay_chat_diagnostics
+
+    old_url = (
+        '<div class="message-text">'
+        'https://steamcommunity.com/tradeoffer/new/?partner=123&token=OLD_SECRET'
+        '</div>'
+    )
+    refund = (
+        '<div class="alert alert-with-icon alert-info">'
+        'Продавец Seller вернул деньги покупателю Buyer по заказу #ABCD1234.'
+        '</div>'
+    )
+    timeline = parse_funpay_history_payload(
+        _history_payload([
+            _history_message(10, 123456789, old_url),
+            _history_message(11, 0, refund),
+        ]),
+        expected_chat_id="297865070",
+    )
+
+    result = summarize_funpay_chat_diagnostics(timeline, {}, "297865070")
+
+    assert result["latest"]["author_kind"] == "system"
+    assert result["latest_buyer_input"]["message_id"] is None
+    assert result["latest_buyer_input"]["has_trade_url"] is False
+    assert "OLD_SECRET" not in repr(result)
+
