@@ -1638,6 +1638,7 @@ ADMIN_MAIN_MENU = "🏠 Главное меню"
 ADMIN_BACK_MENU = "⬅️ Назад"
 admin_menu_state = {}
 pending_steam_password_admin = set()
+restart_requested = False
 
 def build_admin_keyboard():
     db = load_json(DB_FILE, {"admin_id": None, "vouchers": {}})
@@ -1672,7 +1673,7 @@ def build_admin_keyboard():
         auto_label = "⚙️ Автозапуск Windows: ВКЛ 🟢" if is_autostart_enabled() else "⚙️ Автозапуск Windows: ВЫКЛ 🔴"
         markup.add(auto_label)
         markup.add("🔐 Авторизация Steam", "🔄 Проверить состояние бота")
-        markup.add(ADMIN_BACK_MENU)
+        markup.add("🔁 Перезапустить бота", ADMIN_BACK_MENU)
     else:
         markup.add("📦 Склад", "🟢 FunPay")
         markup.add("🔵 Playerok", "📈 Продажи и аналитика")
@@ -2391,6 +2392,11 @@ def handle_all_messages(message):
         if text == "🔄 Проверить соединение FunPay":
             bot.send_message(message.chat.id, "Статус подключения отображается в сводке FunPay. Обновление состояния выполняется фоновым монитором.", reply_markup=build_admin_keyboard())
             return
+        if text == "🔁 Перезапустить бота":
+            bot.send_message(message.chat.id, "♻️ Перезапускаю Telegram-бота. Windows запустит его снова.")
+            restart_requested = True
+            threading.Thread(target=lambda: (time.sleep(1), bot.stop_polling()), daemon=True).start()
+            return
         if text == "🔄 Проверить состояние бота":
             cfg = load_json(FP_CONFIG_FILE, {})
             playerok_configured = bool(os.getenv("PLAYEROK_TOKEN", "").strip())
@@ -2549,6 +2555,8 @@ try:
     threading.Thread(target=funpay_background_worker, daemon=True).start()
     start_playerok_monitor()
     bot.infinity_polling()
+    if restart_requested:
+        raise SystemExit(42)
 finally:
     import ctypes
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
