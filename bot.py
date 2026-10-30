@@ -734,7 +734,7 @@ def send_funpay_chat_message(node_id, text):
         return False, f"Ошибка отправки: {e}"
 
 from order_parser import detect_order_sets_and_quantity, is_paid_order_notification
-from funpay_orders import (compact_funpay_text, decode_text_attachment, extract_chat_message_fragments, extract_funpay_system_alert_fragments, extract_last_customer_message_fragment, extract_steam_trade_url, extract_text_attachment_href, filter_reserved_assets, find_open_order_for_chat, funpay_cold_start_blockers, inventory_cache_freshness_error, is_funpay_system_message, mark_input_received, register_payment, message_signature, restore_reserved_assets, voucher_redemption_block_reason, voucher_reset_block_reason)
+from funpay_orders import (compact_funpay_text, decode_text_attachment, extract_last_customer_message_fragment, extract_steam_trade_url, extract_text_attachment_href, filter_reserved_assets, find_open_order_for_chat, funpay_cold_start_blockers, inventory_cache_freshness_error, is_funpay_system_message, mark_input_received, register_payment, message_signature, restore_reserved_assets, voucher_redemption_block_reason, voucher_reset_block_reason)
 from sales_analytics import summarize_sales
 from playerok_orders import (
     active_orders_for_chat,
@@ -1165,8 +1165,16 @@ def funpay_check_unread_chats():
                 record, created = register_funpay_payment(
                     node_id, sender_name, payment_text, event_sets, event_quantity
                 )
+                order_no = record.get("funpay_order_number") or record.get("key") or "без номера"
+                logging.info(
+                    "FunPay payment event matched: order=%s node=%s sets=%s created=%s status=%s",
+                    order_no,
+                    node_id,
+                    record.get("sets_total"),
+                    created,
+                    record.get("status"),
+                )
                 if created:
-                    order_no = record.get("funpay_order_number") or "не найден в тексте"
                     bot.send_message(
                         admin_id,
                         f"⚠️ Оплачен заказ FunPay.\\n"
