@@ -121,10 +121,12 @@ def test_funpay_order_flow_supports_text_attachments_refunds_and_exact_admin_sel
     assert "Вложение не распознано как текстовый файл FunPay" in source
 
 
-def test_telegram_polling_http_timeout_exceeds_long_poll_timeout():
+def test_telegram_polling_uses_supported_sync_timeout_arguments():
     source = read_project_file("bot.py")
-    assert "bot.infinity_polling(timeout=45, skip_pending=False)" in source
-    assert "request_timeout" not in source
+    polling_line = next(line for line in source.splitlines() if "bot.infinity_polling(" in line)
+    assert "timeout=45" in polling_line
+    assert "skip_pending=False" in polling_line
+    assert "request_timeout" not in polling_line
     assert "apihelper.SESSION_TIME_TO_LIVE = 5 * 60" in source
 
 
