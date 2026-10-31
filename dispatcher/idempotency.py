@@ -68,6 +68,10 @@ class SQLiteLeaseStore:
             connection.execute(f"PRAGMA busy_timeout = {int(self.timeout_seconds * 1000)}")
             connection.execute("PRAGMA journal_mode = WAL")
             yield connection
+        except BaseException:
+            if connection.in_transaction:
+                connection.rollback()
+            raise
         finally:
             connection.close()
 
