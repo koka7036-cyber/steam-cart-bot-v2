@@ -9,7 +9,7 @@ def issue(number=1, title="Add focused parser regression tests", body=None, labe
         "title": title,
         "body": body if body is not None else (
             "Implement a bounded regression test for the pure order parser helper. "
-            "Only change tests/test_order_parser.py."
+            "Files to change:\\n- tests/test_order_parser.py."
         ),
         "labels": labels if labels is not None else [{"name": "codex-ready"}],
         "state": state,
@@ -33,7 +33,10 @@ class DispatcherPolicyTests(unittest.TestCase):
 
     def test_rejects_protected_paths(self):
         for path in ("start.bat", ".github/workflows/unsafe.yml", "../secrets/token.txt", "data/orders.json"):
-            body = f"Fix parser behavior in {path} with tests and documentation. " * 2
+            body = (
+                "Implement a bounded parser test with documentation.\\n"
+                f"Files to change:\\n- {path}"
+            )
             self.assertFalse(validate_issue(issue(body=body)).eligible, path)
 
     def test_rejects_live_operations(self):
@@ -47,7 +50,7 @@ class DispatcherPolicyTests(unittest.TestCase):
         body = (
             "Implement a parser-only regression test. Do not touch inventory, runtime data, "
             "credentials, auto-start, or any live Steam, FunPay, or Playerok operations. "
-            "Only modify tests/test_order_parser.py."
+            "Files to change:\\n- tests/test_order_parser.py."
         )
         self.assertTrue(validate_issue(issue(body=body)).eligible)
 
