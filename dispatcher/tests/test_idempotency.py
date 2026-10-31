@@ -1,3 +1,4 @@
+import sqlite3
 import tempfile
 import threading
 import unittest
@@ -88,6 +89,18 @@ class IdempotencyTests(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertEqual(len(first), 64)
         self.assertNotIn("task", first)
+
+    def test_expired_owner_cannot_finish_after_lease_expiry(self):
+        self.store.claim(key="owner/repo#9", owner="run-old")
+        with sqlite3.connect(self.db) as db:
+            db.execute(
+                "UPDATE dispatcher_leases SET lease_expires_at = ? WHERE task_key = ?",
+                ("2000-01-01T00:00:00Z", "owner/repo#9"),
+            )
+        reclaimed = self.store.claim(key="owner/repo#9", owner="run-new")
+        self.assertTrue(reclaimed.acquired)
+        self.assertFalse(self.store.finish(key="owner/repo#9", owner="run-old", success=True))
+        self.assertTrue(self.store.finish(key="owner/repo#9", owner="run-new", success=True))
 
     def test_lease_duration_must_be_bounded(self):
         with self.assertRaises(ValueError):
