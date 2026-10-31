@@ -812,6 +812,11 @@ def migrate_funpay_delivery_config():
 
 
 def recover_interrupted_funpay_deliveries():
+    """Quarantine interrupted Steam requests; never retry an ambiguous POST."""
+    changed_keys = []
+    with funpay_orders_lock:
+        data = load_funpay_orders()
+        for key, record in data["orders"].items():
             if isinstance(record, dict):
                 recovered_status = recover_interrupted_delivery_status(record.get("status"))
                 if recovered_status != record.get("status"):
@@ -821,6 +826,11 @@ def recover_interrupted_funpay_deliveries():
                         "Бот перезапустился во время отправки Steam-предложения; повторная отправка заблокирована во избежание дубля."
                     )
                     changed_keys.append(key)
+        if changed_keys:
+            save_json(FP_ORDERS_FILE, data)
+
+    db = load_json(DB_FILE, {"admin_id": None, "vouchers": {}})
+    voucher_changes = False
     for code, voucher in db.get("vouchers", {}).items():
         if isinstance(voucher, dict) and voucher.get("delivery_state") == "sending":
             voucher["delivery_state"] = "uncertain"
@@ -837,7 +847,6 @@ def recover_interrupted_funpay_deliveries():
             + ", ".join(changed_keys[:8])
             + ". Проверь историю предложений Steam вручную. Автоматический повтор заблокирован."
         )
-
 
 def restore_reservation_to_cache(reservation):
     """Atomically validate and restore a complete reservation after verified return."""
