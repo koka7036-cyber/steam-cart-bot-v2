@@ -15,6 +15,7 @@ permissions:
 
 concurrency:
   group: cloud-codex-dispatcher-${{ github.repository }}
+  queue: max
   cancel-in-progress: false
 
 jobs:
