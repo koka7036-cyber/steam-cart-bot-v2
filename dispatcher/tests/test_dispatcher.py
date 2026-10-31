@@ -10,7 +10,7 @@ def issue(number=1, title="Add focused parser regression tests", body=None, labe
         "body": body if body is not None else (
             "Implement a bounded regression test for the pure order parser helper. "
             "Files to change:\n"
-            "- tests/test_order_parser.py."
+            "- tests/test_order_parser.py"
         ),
         "labels": labels if labels is not None else [{"name": "codex-ready"}],
         "state": state,
@@ -53,7 +53,7 @@ class DispatcherPolicyTests(unittest.TestCase):
             "Implement a parser-only regression test. Do not touch inventory, runtime data, "
             "credentials, auto-start, or any live Steam, FunPay, or Playerok operations. "
             "Files to change:\n"
-            "- tests/test_order_parser.py."
+            "- tests/test_order_parser.py"
         )
         self.assertTrue(validate_issue(issue(body=body)).eligible)
 
