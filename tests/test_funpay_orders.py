@@ -1124,3 +1124,14 @@ def test_funpay_ledger_strict_loader_rejects_invalid_root_and_orders_shape(tmp_p
     invalid_orders.write_text('{"orders": []}', encoding="utf-8")
     with pytest.raises(ValueError):
         load_funpay_orders(invalid_orders)
+
+
+def test_funpay_ledger_strict_loader_rejects_non_dict_order_records(tmp_path):
+    import pytest
+    from funpay_orders import load_funpay_orders
+
+    invalid_record = tmp_path / "invalid-record.json"
+    invalid_record.write_text('{"orders": {"order-1": null}}', encoding="utf-8")
+
+    with pytest.raises(ValueError, match="order record"):
+        load_funpay_orders(invalid_record)
