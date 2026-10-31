@@ -1095,3 +1095,49 @@ def test_funpay_diagnostic_does_not_reuse_old_buyer_url_after_latest_refund():
     assert result["latest_buyer_input"]["has_trade_url"] is False
     assert "OLD_SECRET" not in repr(result)
 
+
+
+# Regression coverage for manual Steam offer reconciliation after FunPay refunds.
+import pytest
+
+
+@pytest.mark.parametrize("resolution", ["accepted", "returned"])
+def test_offer_resolution_blocks_recorded_funpay_refund(resolution):
+    from funpay_orders import offer_resolution_block_reason
+
+    record = {"status": "delivery_uncertain", "funpay_refunded": True}
+    reason = offer_resolution_block_reason(record, resolution)
+
+    assert isinstance(reason, str) and reason.strip()
+
+
+@pytest.mark.parametrize("status", ["refund_review", "refunded", "refunded_cancelled"])
+@pytest.mark.parametrize("resolution", ["accepted", "returned"])
+def test_offer_resolution_blocks_refund_statuses(status, resolution):
+    from funpay_orders import offer_resolution_block_reason
+
+    record = {"status": status, "funpay_refunded": False}
+    reason = offer_resolution_block_reason(record, resolution)
+
+    assert isinstance(reason, str) and reason.strip()
+
+
+@pytest.mark.parametrize(
+    "status",
+    ["offer_sent", "offer_pending_confirmation", "delivery_uncertain", "sending"],
+)
+@pytest.mark.parametrize("resolution", ["accepted", "returned"])
+def test_offer_resolution_allows_eligible_unreffunded_orders(status, resolution):
+    from funpay_orders import offer_resolution_block_reason
+
+    record = {"status": status, "funpay_refunded": False}
+
+    assert offer_resolution_block_reason(record, resolution) is None
+
+
+def test_offer_resolution_rejects_unsupported_resolution():
+    from funpay_orders import offer_resolution_block_reason
+
+    assert offer_resolution_block_reason(
+        {"status": "offer_sent"}, "retry"
+    )
