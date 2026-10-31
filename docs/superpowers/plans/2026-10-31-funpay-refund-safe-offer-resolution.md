@@ -75,4 +75,4 @@
 - [x] Add a pure helper that preserves refund-review and final refund states.
 - [x] Apply the helper when persisting the Steam response under the existing order lock.
 - [x] Add an administrator warning when the refund overlaps an in-flight delivery.
-- [ ] Run final CI on the latest commit and review the final diff.
+- [x] Run final CI on the latest commit: 205 passed; compileall, PowerShell syntax/updater integrity, and Playerok read-only SDK smoke passed. Review the complete PR diff.
