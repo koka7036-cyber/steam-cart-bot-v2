@@ -46,7 +46,7 @@ class DispatcherPolicyTests(unittest.TestCase):
     def test_does_not_reject_explicit_safety_prohibitions(self):
         body = (
             "Implement a parser-only regression test. Do not touch inventory, runtime data, "
-            "credentials, auto-start, or perform live Steam, FunPay, or Playerok operations. "
+            "credentials, auto-start, or any live Steam, FunPay, or Playerok operations. "
             "Only modify tests/test_order_parser.py."
         )
         self.assertTrue(validate_issue(issue(body=body)).eligible)
