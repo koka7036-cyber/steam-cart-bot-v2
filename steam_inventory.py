@@ -83,7 +83,13 @@ def collect_inventory_pages(
                 raise SteamInventoryPaginationError(
                     "В описании предмета Steam отсутствуют classid/instanceid."
                 )
-            descriptions[f"{class_id}_{instance_id}"] = description
+            description_key = f"{class_id}_{instance_id}"
+            previous_description = descriptions.get(description_key)
+            if previous_description is not None and previous_description != description:
+                raise SteamInventoryPaginationError(
+                    "Steam вернул разные описания для одного classid/instanceid; кэш не обновлён."
+                )
+            descriptions[description_key] = description
 
         has_more = page.get("more_items") in (1, True, "1")
         if not has_more:
