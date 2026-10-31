@@ -124,19 +124,23 @@ def validate_issue(issue: Mapping[str, Any]) -> QueueDecision:
 
     # Only inspect an explicit allowlist block. Prose may mention protected
     # filenames as examples or prohibitions and must not be treated as targets.
-    file_block = re.search(
-        r"(?im)^files\s+to\s+change\s*:\s*(.*?)(?=^\S[^\n]*:\s*$|\Z)",
-        body,
-        re.S,
-    )
-    if not file_block:
+    # Parse only Markdown list entries immediately following the explicit
+    # Files to change heading. Other prose is deliberately ignored.
+    declared_paths: list[str] = []
+    lines = body.splitlines()
+    for index, line in enumerate(lines):
+        if line.strip().lower().rstrip(":") == "files to change":
+            for candidate in lines[index + 1:]:
+                stripped = candidate.strip()
+                if not stripped:
+                    break
+                if not (stripped.startswith("- ") or stripped.startswith("* ")):
+                    break
+                declared_paths.append(stripped[2:].strip().strip("`'\""))
+            break
+    if not declared_paths:
         return QueueDecision(number, title, False, "missing explicit Files to change allowlist")
-    declared_paths = [
-        token.strip().strip("`'\"")
-        for token in re.split(r"[\s,;]+", file_block.group(1))
-        if token.strip().strip("`'\"")
-    ]
-    if not declared_paths or any(_is_protected_path(path) for path in declared_paths):
+    if any(_is_protected_path(path) for path in declared_paths):
         return QueueDecision(number, title, False, "declared file path is protected or invalid")
 
     if not _WORD.search(task_text):
