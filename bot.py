@@ -1822,7 +1822,8 @@ def update_inventory_cache():
             timeout=20,
         )
         if response.status_code == 429:
-            raise SteamInventoryRateLimitError("HTTP 429")
+            retry_after = response.headers.get("Retry-After")
+            raise SteamInventoryRateLimitError(retry_after or "")
         response.raise_for_status()
         return response.json()
 
