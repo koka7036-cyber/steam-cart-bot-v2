@@ -966,3 +966,17 @@ def mark_input_received(record: dict, input_kind: str) -> None:
     record["input_received_at"] = int(time.time())
     record["updated_at"] = int(time.time())
     record["status"] = "input_received"
+
+
+
+
+def recover_interrupted_delivery_status(status):
+    """Return a fail-closed status for an interrupted Steam delivery request.
+
+    Only an in-flight request is ambiguous after process restart. Resolved,
+    refunded, or already uncertain states must not be downgraded.
+    """
+    normalized = str(status or "").strip().lower()
+    if normalized == "sending":
+        return "delivery_uncertain"
+    return normalized
