@@ -16,6 +16,7 @@ C:\CardBot\dispatcher-state\dispatcher.sqlite3
 
 Requirements:
 - The database and its directory must be on a local NTFS volume, not OneDrive, a network share, or a synchronized folder.
+- One designated worker process owns the SQLite file. Do not start a second independent worker against the same database until multi-process WAL initialization and contention tests have passed on the target Windows/NTFS environment. `BEGIN IMMEDIATE` serializes write transactions but does not replace process-level startup coordination around WAL setup and schema migrations.
 - Restrict directory ACLs to the dedicated Windows account that runs the worker and local administrators.
 - Keep SQLite WAL/SHM files beside the database; do not copy only the main DB while the worker is running.
 - Back up the database using SQLite's online backup API or after a clean worker shutdown.
@@ -40,6 +41,7 @@ Requirements:
 - Do not let Codex modify workflows, deployment scripts, Windows startup scripts, credentials, runtime state, inventory, orders, or FunPay/Playerok mutation code.
 - Do not run sales, Steam POST requests, trade delivery, or marketplace writes from the dispatcher.
 - The worker must stop on unknown configuration, missing tools, failed tests, expired lease, or an unexpected diff. Fail closed.
+- Treat legacy lease rows with a NULL fencing token as non-renewable/non-finishable. Do not backfill tokens into active legacy rows: allow them to expire and reclaim them so an old process cannot be legitimized by migration.
 
 ## Windows prerequisites
 
