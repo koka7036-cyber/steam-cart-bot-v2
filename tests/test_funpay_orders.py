@@ -1098,10 +1098,11 @@ def test_funpay_diagnostic_does_not_reuse_old_buyer_url_after_latest_refund():
 
 
 
+
 def test_funpay_ledger_strict_loader_distinguishes_missing_from_corrupted_file(tmp_path):
     import json
     import pytest
-    from bot import load_funpay_orders
+    from funpay_orders import load_funpay_orders
 
     missing = tmp_path / "missing-orders.json"
     assert load_funpay_orders(missing) == {"orders": {}}
@@ -1113,9 +1114,8 @@ def test_funpay_ledger_strict_loader_distinguishes_missing_from_corrupted_file(t
 
 
 def test_funpay_ledger_strict_loader_rejects_invalid_root_and_orders_shape(tmp_path):
-    import json
     import pytest
-    from bot import load_funpay_orders
+    from funpay_orders import load_funpay_orders
 
     invalid_root = tmp_path / "root.json"
     invalid_root.write_text('[]', encoding="utf-8")
