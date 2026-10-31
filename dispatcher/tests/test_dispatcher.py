@@ -1,6 +1,6 @@
 import unittest
 
-from dispatcher import select_next_task, validate_issue
+from dispatcher.dispatcher import select_next_task, validate_issue
 
 
 def issue(number=1, title="Add focused parser regression tests", body=None, labels=None, state="open"):
