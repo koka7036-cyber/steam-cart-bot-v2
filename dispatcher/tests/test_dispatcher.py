@@ -8,7 +8,7 @@ def issue(number=1, title="Add focused parser regression tests", body=None, labe
         "number": number,
         "title": title,
         "body": body if body is not None else (
-            "Implement a bounded regression test for the pure order parser helper. "
+            "Implement a bounded regression test for the pure order parser helper.\n"
             "Files to change:\n"
             "- tests/test_order_parser.py"
         ),
@@ -35,7 +35,7 @@ class DispatcherPolicyTests(unittest.TestCase):
     def test_rejects_protected_paths(self):
         for path in ("start.bat", ".github/workflows/unsafe.yml", "../secrets/token.txt", "data/orders.json"):
             body = (
-                "Implement a bounded parser test with documentation.\\n"
+                "Implement a bounded parser test with documentation.\n"
                 "Files to change:\n"
                 f"- {path}"
             )
@@ -50,8 +50,9 @@ class DispatcherPolicyTests(unittest.TestCase):
 
     def test_does_not_reject_explicit_safety_prohibitions(self):
         body = (
-            "Implement a parser-only regression test. Do not touch inventory, runtime data, "
-            "credentials, auto-start, or any live Steam, FunPay, or Playerok operations. "
+            "Implement a parser-only regression test.\n"
+            "Do not touch inventory, runtime data, credentials, auto-start, or any live "
+            "Steam, FunPay, or Playerok operations.\n"
             "Files to change:\n"
             "- tests/test_order_parser.py"
         )
