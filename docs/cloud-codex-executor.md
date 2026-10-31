@@ -1,6 +1,6 @@
 # Cloud Codex task guardrails
 
-The manual workflow `.github/workflows/cloud-codex.yml` runs one bounded Codex CLI task through AnyModel.
+The manual workflow `.github/workflows/cloud-codex.yml` runs one bounded Codex CLI task through AnyModel. It pins `@openai/codex` to version `0.166.0`; update this exact version deliberately after reviewing the release and rerunning CI.
 
 ## Safety model
 - Trigger is manual only and restricted to the main ref.
