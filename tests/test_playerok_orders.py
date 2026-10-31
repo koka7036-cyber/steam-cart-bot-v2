@@ -7,6 +7,7 @@ from playerok_orders import (
     map_item_to_sets,
     mark_trade_url_received,
     normalize_platform_status,
+    should_notify_admin_status_change,
     summarize_orders,
     upsert_deal,
 )
@@ -288,3 +289,10 @@ def test_quantity_conflict_stays_in_manual_review_after_confirmed_event():
     assert record["mapping_conflict"] is True
     assert record["fulfillment_status"] == "needs_review"
     assert active_orders_for_chat(orders, "chat-conflict-2") == []
+
+
+
+def test_problem_resolved_status_triggers_admin_notification_without_claiming_delivery():
+    assert should_notify_admin_status_change({"platform_status": "problem_resolved"}) is True
+    assert should_notify_admin_status_change({"platform_status": "paid"}) is False
+    assert should_notify_admin_status_change({"platform_status": "unknown"}) is False
