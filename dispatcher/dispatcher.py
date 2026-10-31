@@ -77,24 +77,25 @@ def _is_protected_path(path: str) -> bool:
 
 
 def _requested_protected_operation(text: str) -> bool:
-    """Conservative intent check; explicit safety prohibitions are not requests."""
+    """Conservatively block direct protected-action requests, not prohibitions."""
     lowered = text.lower()
-    # Remove short negative clauses before checking imperative verbs. This
-    # prevents "do not perform live sales" from being treated as a request.
-    negative_clause = re.compile(
-        r"\\b(?:do\\s+not|don't|never|without|no)\\b[^.!?;]{0,180}",
-        re.I,
+    # Strip explicit negative instructions before the positive-intent check.
+    candidate = re.sub(
+        r"\b(?:do\s+not|don't|never|without|no)\b[^.!?;]{0,180}",
+        " ",
+        lowered,
+        flags=re.I,
     )
-    candidate = negative_clause.sub(" ", lowered)
     patterns = (
-        r"\\b(?:implement|add|enable|perform|execute|send|submit)\\b[^\\n.]{0,120}\\b(?:live|real)\\s+sales?\\b",
-        r"\\b(?:implement|add|enable|perform|execute|send|submit)\\b[^\\n.]{0,120}\\bsteam\\s+post\\b",
-        r"\\b(?:implement|add|enable|perform|execute)\\b[^\\n.]{0,120}\\b(?:funpay|playerok)\\s+mutations?\\b",
-        r"\\b(?:implement|add|enable)\\b[^\\n.]{0,120}\\bautomatic\\s+delivery\\b",
-        r"\\b(?:modify|change|read|write|delete|expose)\\b[^\\n.]{0,120}\\b(?:runtime\\s+data|order\\s+ledger|inventory\\s+cache|credentials?|secrets?)\\b",
-        r"\\b(?:modify|change|enable|install)\\b[^\\n.]{0,120}\\b(?:auto[- ]?start|deployment\\s+scripts?)\\b",
+        r"\b(?:implement|add|enable|perform|execute|send|submit)\b[^\n.]{0,120}\b(?:live|real)\s+sales?\b",
+        r"\b(?:implement|add|enable|perform|execute|send|submit)\b[^\n.]{0,120}\bsteam\s+post\b",
+        r"\b(?:implement|add|enable|perform|execute)\b[^\n.]{0,120}\b(?:funpay|playerok)\s+mutations?\b",
+        r"\b(?:implement|add|enable)\b[^\n.]{0,120}\bautomatic\s+delivery\b",
+        r"\b(?:modify|change|read|write|delete|expose)\b[^\n.]{0,120}\b(?:runtime\s+data|order\s+ledger|inventory\s+cache|credentials?|secrets?)\b",
+        r"\b(?:modify|change|enable|install)\b[^\n.]{0,120}\b(?:auto[- ]?start|deployment\s+scripts?)\b",
     )
     return any(re.search(pattern, candidate, re.I) for pattern in patterns)
+
 
 def validate_issue(issue: Mapping[str, Any]) -> QueueDecision:
     """Fail-closed validation for one GitHub issue-shaped mapping."""
