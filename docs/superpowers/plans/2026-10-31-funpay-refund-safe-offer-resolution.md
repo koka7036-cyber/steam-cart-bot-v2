@@ -37,15 +37,15 @@
 - Produces: `offer_resolution_block_reason(record: dict, resolution: str) -> str | None`
 - Consumes: the helper from the existing `bot.py` command handler.
 
-- [ ] **Step 1: Write failing tests first**
+- [x] **Step 1: Write failing tests first**
   - Add parametrized tests proving both `accepted` and `returned` are blocked for `funpay_refunded=True`.
   - Add parametrized tests proving both actions are blocked for `refund_review`, `refunded`, and `refunded_cancelled`.
   - Add tests proving eligible statuses `offer_sent`, `offer_pending_confirmation`, `delivery_uncertain`, and `sending` return `None` for both valid resolutions.
   - Add a test proving unsupported resolution is rejected.
 
 - [ ] **Step 2: Run the focused test and verify RED**
-  - Run: `pytest tests/test_funpay_orders.py -q`
-  - Expected: failures because `offer_resolution_block_reason` does not exist yet.
+  - Run: `python -m pytest -q`
+  - Expected: 17 new cases fail with ImportError because `offer_resolution_block_reason` does not exist yet; 156 existing tests pass.
 
 - [ ] **Step 3: Implement the pure guard**
   - In `funpay_orders.py`, return a non-empty Russian block reason for a non-dict record, unsupported resolution, a true refund flag, or a refund/refund-review status.
@@ -57,7 +57,7 @@
 
 - [ ] **Step 5: Run verification**
   - Run: `pytest -q`
-  - Expected: full suite passes, including the new refund regression tests.
+  - Expected: full suite passes — 173 passed.
 
 - [ ] **Step 6: Commit**
   - Commit the guard and integration with message `fix: block offer resolution after FunPay refunds`.
