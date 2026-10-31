@@ -38,28 +38,28 @@ class IdempotencyTests(unittest.TestCase):
         self.assertEqual(second.status, "already_running")
 
     def test_completed_task_cannot_be_claimed_again(self):
-        self.store.claim(key="owner/repo#2", owner="run-1")
-        self.assertTrue(self.store.finish(key="owner/repo#2", owner="run-1", success=True))
+        claim = self.store.claim(key="owner/repo#2", owner="run-1")
+        self.assertTrue(self.store.finish(key="owner/repo#2", owner="run-1", fencing_token=claim.fencing_token, success=True))
         result = self.store.claim(key="owner/repo#2", owner="run-2")
         self.assertFalse(result.acquired)
         self.assertEqual(result.status, "already_completed")
 
     def test_wrong_owner_cannot_finish_or_renew(self):
-        self.store.claim(key="owner/repo#3", owner="run-1")
-        self.assertFalse(self.store.finish(key="owner/repo#3", owner="run-2", success=True))
-        self.assertFalse(self.store.renew(key="owner/repo#3", owner="run-2"))
+        claim = self.store.claim(key="owner/repo#3", owner="run-1")
+        self.assertFalse(self.store.finish(key="owner/repo#3", owner="run-2", fencing_token=claim.fencing_token, success=True))
+        self.assertFalse(self.store.renew(key="owner/repo#3", owner="run-2", fencing_token=claim.fencing_token))
 
     def test_failed_task_can_be_reclaimed(self):
-        self.store.claim(key="owner/repo#4", owner="run-1")
-        self.assertTrue(self.store.finish(key="owner/repo#4", owner="run-1", success=False, error="tests failed"))
+        claim = self.store.claim(key="owner/repo#4", owner="run-1")
+        self.assertTrue(self.store.finish(key="owner/repo#4", owner="run-1", fencing_token=claim.fencing_token, success=False, error="tests failed"))
         next_claim = self.store.claim(key="owner/repo#4", owner="run-2")
         self.assertTrue(next_claim.acquired)
         self.assertEqual(next_claim.status, "reclaimed")
 
     def test_lease_renewal_succeeds_only_for_current_live_owner(self):
-        self.store.claim(key="owner/repo#5", owner="run-1")
-        self.assertTrue(self.store.renew(key="owner/repo#5", owner="run-1"))
-        self.assertFalse(self.store.renew(key="owner/repo#5", owner="run-2"))
+        claim = self.store.claim(key="owner/repo#5", owner="run-1")
+        self.assertTrue(self.store.renew(key="owner/repo#5", owner="run-1", fencing_token=claim.fencing_token))
+        self.assertFalse(self.store.renew(key="owner/repo#5", owner="run-2", fencing_token=claim.fencing_token))
 
     def test_run_id_is_idempotent(self):
         self.store.claim(key="owner/repo#6", owner="run-1")
@@ -91,7 +91,7 @@ class IdempotencyTests(unittest.TestCase):
         self.assertNotIn("task", first)
 
     def test_expired_owner_cannot_finish_after_lease_expiry(self):
-        self.store.claim(key="owner/repo#9", owner="run-old")
+        old_claim = self.store.claim(key="owner/repo#9", owner="run-old")
         with sqlite3.connect(self.db) as db:
             db.execute(
                 "UPDATE dispatcher_leases SET lease_expires_at = ? WHERE task_key = ?",
@@ -99,8 +99,18 @@ class IdempotencyTests(unittest.TestCase):
             )
         reclaimed = self.store.claim(key="owner/repo#9", owner="run-new")
         self.assertTrue(reclaimed.acquired)
-        self.assertFalse(self.store.finish(key="owner/repo#9", owner="run-old", success=True))
-        self.assertTrue(self.store.finish(key="owner/repo#9", owner="run-new", success=True))
+        self.assertFalse(self.store.finish(key="owner/repo#9", owner="run-old", fencing_token=old_claim.fencing_token, success=True))
+        self.assertTrue(self.store.finish(key="owner/repo#9", owner="run-new", fencing_token=reclaimed.fencing_token, success=True))
+
+    def test_same_owner_stale_attempt_is_fenced_after_reclaim(self):
+        old = self.store.claim(key="owner/repo#10", owner="stable-worker")
+        with sqlite3.connect(self.db) as db:
+            db.execute("UPDATE dispatcher_leases SET lease_expires_at = ? WHERE task_key = ?", ("2000-01-01T00:00:00Z", "owner/repo#10"))
+        new = self.store.claim(key="owner/repo#10", owner="stable-worker")
+        self.assertNotEqual(old.fencing_token, new.fencing_token)
+        self.assertFalse(self.store.finish(key="owner/repo#10", owner="stable-worker", fencing_token=old.fencing_token, success=True))
+        self.assertFalse(self.store.renew(key="owner/repo#10", owner="stable-worker", fencing_token=old.fencing_token))
+        self.assertTrue(self.store.finish(key="owner/repo#10", owner="stable-worker", fencing_token=new.fencing_token, success=True))
 
     def test_lease_duration_must_be_bounded(self):
         with self.assertRaises(ValueError):
