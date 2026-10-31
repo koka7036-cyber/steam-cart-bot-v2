@@ -124,7 +124,7 @@ class SQLiteLeaseStore:
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
             current = db.execute(
-                "SELECT task_key, owner, status, lease_expires_at, attempt "
+                "SELECT task_key, owner, status, lease_expires_at, attempt, fencing_token "
                 "FROM dispatcher_leases WHERE task_key = ?",
                 (key,),
             ).fetchone()
