@@ -50,8 +50,14 @@ def test_monitor_awaits_async_listener_and_supports_private_router(monkeypatch):
                 item=types.SimpleNamespace(id="one", name="One-set lot https://steamcommunity.com/tradeoffer/new/?partner=1&token=do-not-persist"),
                 chat=types.SimpleNamespace(id="chat-1"),
             )
+            confirmed_deal = types.SimpleNamespace(
+                id="confirmed-deal-2",
+                status="CONFIRMED",
+                item=types.SimpleNamespace(id="five", name="Five-set lot"),
+                chat=types.SimpleNamespace(id="chat-2"),
+            )
             page_info = types.SimpleNamespace(has_next_page=False, end_cursor=None)
-            return types.SimpleNamespace(deals=[deal], page_info=page_info)
+            return types.SimpleNamespace(deals=[deal, confirmed_deal], page_info=page_info)
 
     class FakePlayerokListener:
         def __init__(self, account):
@@ -92,11 +98,12 @@ def test_monitor_awaits_async_listener_and_supports_private_router(monkeypatch):
     assert state["listener"] is not None
     assert "on_item_paid" in state["listener"]._router.handlers
     assert "on_new_message" in state["listener"]._router.handlers
-    assert len(state["events"]) == 1
+    assert len(state["events"]) == 2
     event = state["events"][0]
     assert event["is_initial_sync"] is True
     assert event["deal_id"] == "open-deal-1"
     assert event["sets"] == 1
+    assert [row["status"] for row in state["events"]] == ["paid", "confirmed"]
     assert "tradeoffer/new" not in event["item_name"]
     assert "do-not-persist" not in event["item_name"]
     assert "trade_url" not in event
@@ -109,7 +116,6 @@ def _install_fake_playerok_status_enums(monkeypatch):
     types_package = types.ModuleType("PyPlayerokAPI.types")
     types_package.__path__ = []
     enums_module = types.ModuleType("PyPlayerokAPI.types.enums")
-    enums_module.ItemDealStatuses = types.SimpleNamespace(PAID="PAID", PENDING="PENDING")
     enums_module.ItemDealDirections = types.SimpleNamespace(OUT="OUT")
     monkeypatch.setitem(sys.modules, "PyPlayerokAPI", package)
     monkeypatch.setitem(sys.modules, "PyPlayerokAPI.types", types_package)
