@@ -183,8 +183,9 @@ class SQLiteLeaseStore:
             result = db.execute(
                 "UPDATE dispatcher_leases SET status = ?, lease_expires_at = NULL, "
                 "updated_at = ?, last_error = ? "
-                "WHERE task_key = ? AND owner = ? AND status = 'running'",
-                (status, now, safe_error, key, owner),
+                "WHERE task_key = ? AND owner = ? AND status = 'running' "
+                "AND lease_expires_at > ?",
+                (status, now, safe_error, key, owner, now),
             )
             db.commit()
             return result.rowcount == 1
