@@ -183,8 +183,14 @@ def upsert_deal(
     terminal = current_status in FINAL_PLATFORM_STATUSES
     if normalized_status != "unknown" and normalized_status != current_status:
         # Do not let late/replayed events move a completed deal backward.
+        # A delayed "problem" event must not undo a later problem-resolution
+        # event. Confirmed/rolled-back events may still advance the deal afterward.
+        stale_problem_after_resolution = (
+            current_status == "problem_resolved" and normalized_status == "problem"
+        )
         should_update = (
             not terminal
+            and not stale_problem_after_resolution
             and (
                 normalized_status in {"confirmed", "rolled_back", "problem", "problem_resolved"}
                 or (current_status == "pending" and normalized_status == "paid")
