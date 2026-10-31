@@ -111,3 +111,47 @@ def collect_inventory_pages(
     raise SteamInventoryPaginationError(
         f"Превышен лимит страниц инвентаря Steam ({max_pages}); кэш не обновлён."
     )
+
+
+"""Helpers for safe Steam inventory rate-limit guidance."""
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
+
+
+DEFAULT_RETRY_AFTER_SECONDS = 120
+MAX_RETRY_AFTER_SECONDS = 15 * 60
+
+
+def retry_after_seconds(value: str | None, *, now: datetime | None = None) -> int:
+    """Parse Retry-After as delta-seconds or HTTP-date.
+
+    Invalid/missing values fall back to 120 seconds. Values are clamped to
+    [1, 900] seconds so the operator receives conservative, bounded guidance.
+    This helper does not sleep or retry requests.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return DEFAULT_RETRY_AFTER_SECONDS
+
+    raw = value.strip()
+    seconds: float | None = None
+    try:
+        seconds = float(raw)
+    except ValueError:
+        try:
+            retry_at = parsedate_to_datetime(raw)
+            if retry_at.tzinfo is None:
+                retry_at = retry_at.replace(tzinfo=timezone.utc)
+            current = now or datetime.now(timezone.utc)
+            if current.tzinfo is None:
+                current = current.replace(tzinfo=timezone.utc)
+            seconds = (retry_at - current).total_seconds()
+        except (TypeError, ValueError, OverflowError):
+            return DEFAULT_RETRY_AFTER_SECONDS
+
+    if seconds is None:
+        return DEFAULT_RETRY_AFTER_SECONDS
+    if seconds <= 0:
+        return 1
+    return min(MAX_RETRY_AFTER_SECONDS, max(1, int(seconds + 0.999)))
