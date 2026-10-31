@@ -14,6 +14,7 @@ import sqlite3
 from pathlib import Path
 from typing import Iterator
 from contextlib import contextmanager
+import uuid
 
 LEASE_SCHEMA_VERSION = 1
 
@@ -25,6 +26,7 @@ class LeaseClaim:
     acquired: bool
     status: str
     lease_expires_at: str | None = None
+    fencing_token: str | None = None
 
 
 def task_key(repository: str, issue_number: int) -> str:
@@ -95,6 +97,12 @@ class SQLiteLeaseStore:
                     FOREIGN KEY(task_key) REFERENCES dispatcher_leases(task_key)
                 )
             """)
+            columns = {
+                row["name"]
+                for row in db.execute("PRAGMA table_info(dispatcher_leases)")
+            }
+            if "fencing_token" not in columns:
+                db.execute("ALTER TABLE dispatcher_leases ADD COLUMN fencing_token TEXT")
             db.execute("PRAGMA user_version = 1")
 
     def claim(
@@ -112,6 +120,7 @@ class SQLiteLeaseStore:
         now = _utc_now()
         expires = now + timedelta(seconds=lease_seconds)
         now_text, expires_text = _iso(now), _iso(expires)
+        fencing_token = uuid.uuid4().hex
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
             current = db.execute(
@@ -123,46 +132,48 @@ class SQLiteLeaseStore:
             if current is None:
                 db.execute(
                     "INSERT INTO dispatcher_leases "
-                    "(task_key, owner, status, lease_expires_at, created_at, updated_at, attempt) "
-                    "VALUES (?, ?, 'running', ?, ?, ?, 1)",
-                    (key, owner, expires_text, now_text, now_text),
+                    "(task_key, owner, status, lease_expires_at, created_at, updated_at, attempt, fencing_token) "
+                    "VALUES (?, ?, 'running', ?, ?, ?, 1, ?)",
+                    (key, owner, expires_text, now_text, now_text, fencing_token),
                 )
                 db.commit()
-                return LeaseClaim(key, owner, True, "acquired", expires_text)
+                return LeaseClaim(key, owner, True, "acquired", expires_text, fencing_token)
 
             if current["status"] == "completed":
                 db.commit()
-                return LeaseClaim(key, owner, False, "already_completed", current["lease_expires_at"])
+                return LeaseClaim(key, owner, False, "already_completed", current["lease_expires_at"], current["fencing_token"])
 
             current_expiry = current["lease_expires_at"]
             expired = not current_expiry or current_expiry <= now_text
             if current["status"] == "running" and not expired:
                 db.commit()
-                return LeaseClaim(key, owner, False, "already_running", current_expiry)
+                return LeaseClaim(key, owner, False, "already_running", current_expiry, current["fencing_token"])
 
             # Failed tasks and expired leases can be reclaimed by a new owner.
             # Same-owner retries are also allowed after lease expiry.
             db.execute(
                 "UPDATE dispatcher_leases SET owner = ?, status = 'running', "
-                "lease_expires_at = ?, updated_at = ?, attempt = attempt + 1, last_error = NULL "
-                "WHERE task_key = ?",
-                (owner, expires_text, now_text, key),
+                "lease_expires_at = ?, updated_at = ?, attempt = attempt + 1, last_error = NULL, "
+                "fencing_token = ? WHERE task_key = ?",
+                (owner, expires_text, now_text, fencing_token, key),
             )
             db.commit()
-            return LeaseClaim(key, owner, True, "reclaimed", expires_text)
+            return LeaseClaim(key, owner, True, "reclaimed", expires_text, fencing_token)
 
-    def renew(self, *, key: str, owner: str, lease_seconds: int = 900) -> bool:
-        if lease_seconds < 30:
-            raise ValueError("lease_seconds must be >= 30")
+    def renew(self, *, key: str, owner: str, fencing_token: str, lease_seconds: int = 900) -> bool:
+        if isinstance(lease_seconds, bool) or not isinstance(lease_seconds, int) or lease_seconds < 30:
+            raise ValueError("lease_seconds must be an integer >= 30")
+        if not key or not owner or not fencing_token:
+            raise ValueError("key, owner and fencing_token are required")
         now = _utc_now()
         expires = _iso(now + timedelta(seconds=lease_seconds))
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
             result = db.execute(
                 "UPDATE dispatcher_leases SET lease_expires_at = ?, updated_at = ? "
-                "WHERE task_key = ? AND owner = ? AND status = 'running' "
+                "WHERE task_key = ? AND owner = ? AND fencing_token = ? AND status = 'running' "
                 "AND lease_expires_at > ?",
-                (expires, _iso(now), key, owner, _iso(now)),
+                (expires, _iso(now), key, owner, fencing_token, _iso(now)),
             )
             db.commit()
             return result.rowcount == 1
@@ -172,9 +183,12 @@ class SQLiteLeaseStore:
         *,
         key: str,
         owner: str,
+        fencing_token: str,
         success: bool,
         error: str | None = None,
     ) -> bool:
+        if not key or not owner or not fencing_token:
+            raise ValueError("key, owner and fencing_token are required")
         now = _iso(_utc_now())
         status = "completed" if success else "failed"
         safe_error = None if success else (error or "unspecified failure")[:500]
@@ -183,9 +197,9 @@ class SQLiteLeaseStore:
             result = db.execute(
                 "UPDATE dispatcher_leases SET status = ?, lease_expires_at = NULL, "
                 "updated_at = ?, last_error = ? "
-                "WHERE task_key = ? AND owner = ? AND status = 'running' "
+                "WHERE task_key = ? AND owner = ? AND fencing_token = ? AND status = 'running' "
                 "AND lease_expires_at > ?",
-                (status, now, safe_error, key, owner, now),
+                (status, now, safe_error, key, owner, fencing_token, now),
             )
             db.commit()
             return result.rowcount == 1
@@ -194,7 +208,7 @@ class SQLiteLeaseStore:
         with self._connect() as db:
             row = db.execute(
                 "SELECT task_key, owner, status, lease_expires_at, created_at, updated_at, "
-                "attempt, last_error FROM dispatcher_leases WHERE task_key = ?",
+                "attempt, last_error, fencing_token FROM dispatcher_leases WHERE task_key = ?",
                 (key,),
             ).fetchone()
         return dict(row) if row else None
