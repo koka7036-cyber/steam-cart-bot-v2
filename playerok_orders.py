@@ -119,6 +119,8 @@ def upsert_deal(
 
     Repeated events are idempotent. A stale PAID event cannot regress SENT or
     CONFIRMED. Conflicting listing IDs on the same deal force manual review.
+    A resolved Playerok problem remains in manual review; later status events
+    must not imply that the dispute was cleared or that fulfillment resumed.
     """
     safe_deal_id = _safe_id(deal_id)
     if not safe_deal_id:
@@ -197,10 +199,15 @@ def upsert_deal(
             if record.get("mapping_conflict"):
                 # Keep conflicting listing/quantity mappings in manual review.
                 record["fulfillment_status"] = "needs_review"
+            elif normalized_status == "problem_resolved":
+                # The platform resolves the support case, not the seller's
+                # delivery review. Keep fulfillment blocked for administrator review.
+                record["fulfillment_status"] = "manual_review"
+            elif current_status == "problem_resolved":
+                # A late/replayed status must not undo the manual-review hold.
+                record["fulfillment_status"] = "manual_review"
             elif normalized_status in {"confirmed", "rolled_back", "problem"}:
                 record["fulfillment_status"] = normalized_status
-            elif normalized_status == "problem_resolved":
-                record["fulfillment_status"] = "manual_review"
             elif normalized_status == "sent":
                 record["fulfillment_status"] = "sent"
             changed = True

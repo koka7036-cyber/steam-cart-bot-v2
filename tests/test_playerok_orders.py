@@ -288,3 +288,60 @@ def test_quantity_conflict_stays_in_manual_review_after_confirmed_event():
     assert record["mapping_conflict"] is True
     assert record["fulfillment_status"] == "needs_review"
     assert active_orders_for_chat(orders, "chat-conflict-2") == []
+
+def test_problem_resolved_keeps_manual_review_after_late_sent_event():
+    orders = {}
+    record, _, _ = upsert_deal(
+        orders, deal_id="resolved-late-sent", status="PAID", item_id="item-one",
+        chat_id="chat-resolved", sets=1, event_type="ITEM_PAID",
+    )
+    upsert_deal(
+        orders, deal_id="resolved-late-sent", status="DEAL_HAS_PROBLEM",
+        item_id="item-one", chat_id="chat-resolved", sets=1,
+        event_type="DEAL_HAS_PROBLEM",
+    )
+    upsert_deal(
+        orders, deal_id="resolved-late-sent", status="DEAL_PROBLEM_RESOLVED",
+        item_id="item-one", chat_id="chat-resolved", sets=1,
+        event_type="DEAL_PROBLEM_RESOLVED",
+    )
+
+    assert record["platform_status"] == "problem_resolved"
+    assert record["fulfillment_status"] == "manual_review"
+    assert active_orders_for_chat(orders, "chat-resolved") == []
+
+    updated, _, changed = upsert_deal(
+        orders, deal_id="resolved-late-sent", status="SENT", item_id="item-one",
+        chat_id="chat-resolved", sets=1, event_type="ITEM_SENT",
+    )
+
+    assert updated is record
+    assert changed is False
+    assert record["platform_status"] == "problem_resolved"
+    assert record["fulfillment_status"] == "manual_review"
+    assert active_orders_for_chat(orders, "chat-resolved") == []
+
+
+def test_problem_resolved_keeps_manual_review_after_replayed_problem_event():
+    orders = {}
+    record, _, _ = upsert_deal(
+        orders, deal_id="resolved-late-problem", status="PAID", item_id="item-one",
+        chat_id="chat-resolved-2", sets=1, event_type="ITEM_PAID",
+    )
+    upsert_deal(
+        orders, deal_id="resolved-late-problem", status="DEAL_PROBLEM_RESOLVED",
+        item_id="item-one", chat_id="chat-resolved-2", sets=1,
+        event_type="DEAL_PROBLEM_RESOLVED",
+    )
+
+    updated, _, changed = upsert_deal(
+        orders, deal_id="resolved-late-problem", status="DEAL_HAS_PROBLEM",
+        item_id="item-one", chat_id="chat-resolved-2", sets=1,
+        event_type="DEAL_HAS_PROBLEM",
+    )
+
+    assert updated is record
+    assert changed is False
+    assert record["platform_status"] == "problem_resolved"
+    assert record["fulfillment_status"] == "manual_review"
+
