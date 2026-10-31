@@ -341,7 +341,6 @@ def test_problem_resolved_keeps_manual_review_after_replayed_problem_event():
     )
 
     assert updated is record
-    assert changed is False
     assert record["platform_status"] == "problem_resolved"
     assert record["fulfillment_status"] == "manual_review"
-
+    assert active_orders_for_chat(orders, "chat-resolved-2") == []

@@ -185,8 +185,11 @@ def upsert_deal(
     terminal = current_status in FINAL_PLATFORM_STATUSES
     if normalized_status != "unknown" and normalized_status != current_status:
         # Do not let late/replayed events move a completed deal backward.
+        # A resolved problem remains a manual-review hold; freeze subsequent
+        # platform status transitions until an administrator reviews the case.
         should_update = (
             not terminal
+            and current_status != "problem_resolved"
             and (
                 normalized_status in {"confirmed", "rolled_back", "problem", "problem_resolved"}
                 or (current_status == "pending" and normalized_status == "paid")
