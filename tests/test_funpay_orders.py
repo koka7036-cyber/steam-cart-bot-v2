@@ -1141,3 +1141,68 @@ def test_offer_resolution_rejects_unsupported_resolution():
     assert offer_resolution_block_reason(
         {"status": "offer_sent"}, "retry"
     )
+
+
+
+# Regression coverage for a FunPay refund arriving while the Steam POST is in flight.
+@pytest.mark.parametrize(
+    "outcome,expected",
+    [
+        ("sent", "offer_sent"),
+        ("created_unconfirmed", "offer_pending_confirmation"),
+        ("unknown", "delivery_uncertain"),
+        ("failed", "retry_required"),
+    ],
+)
+def test_delivery_result_status_preserves_refund_review_during_inflight_send(outcome, expected):
+    from funpay_orders import funpay_delivery_result_status
+
+    record = {"status": "refund_review", "funpay_refunded": True}
+
+    assert funpay_delivery_result_status(record, outcome) == "refund_review"
+
+
+@pytest.mark.parametrize(
+    "status",
+    ["sending", "offer_sent", "delivery_uncertain", "retry_required"],
+)
+@pytest.mark.parametrize(
+    "outcome",
+    ["sent", "created_unconfirmed", "unknown", "failed"],
+)
+def test_delivery_result_status_promotes_refund_flag_to_refund_review(status, outcome):
+    from funpay_orders import funpay_delivery_result_status
+
+    record = {"status": status, "funpay_refunded": True}
+
+    assert funpay_delivery_result_status(record, outcome) == "refund_review"
+
+
+@pytest.mark.parametrize("status", ["refunded", "refunded_cancelled"])
+@pytest.mark.parametrize(
+    "outcome",
+    ["sent", "created_unconfirmed", "unknown", "failed"],
+)
+def test_delivery_result_status_never_downgrades_final_refund_status(status, outcome):
+    from funpay_orders import funpay_delivery_result_status
+
+    record = {"status": status, "funpay_refunded": True}
+
+    assert funpay_delivery_result_status(record, outcome) == status
+
+
+@pytest.mark.parametrize(
+    "outcome,expected",
+    [
+        ("sent", "offer_sent"),
+        ("created_unconfirmed", "offer_pending_confirmation"),
+        ("unknown", "delivery_uncertain"),
+        ("failed", "retry_required"),
+    ],
+)
+def test_delivery_result_status_preserves_normal_outcome_mapping(outcome, expected):
+    from funpay_orders import funpay_delivery_result_status
+
+    record = {"status": "sending", "funpay_refunded": False}
+
+    assert funpay_delivery_result_status(record, outcome) == expected
