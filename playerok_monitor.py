@@ -151,7 +151,8 @@ class PlayerokMonitor:
         try:
             # The SDK limits each page to 24. Cap reconciliation to five pages so
             # a very old account cannot trigger a large scan during bot startup.
-            for _ in range(5):
+            max_pages = 5
+            for page_index in range(max_pages):
                 page = await account.get_deals(
                     count=24,
                     statuses=[ItemDealStatuses.PAID, ItemDealStatuses.PENDING],
@@ -190,7 +191,9 @@ class PlayerokMonitor:
                     break
                 next_cursor = _get(page_info, "end_cursor", "endCursor")
                 if not next_cursor or next_cursor == cursor:
-                    break
+                    return scanned, "PaginationCursorUnavailable"
+                if page_index + 1 == max_pages:
+                    return scanned, "PageLimitReached"
                 cursor = next_cursor
             return scanned, None
         except Exception as exc:
