@@ -28,3 +28,8 @@ Prevent the administrator-only `/fpofferresolve` command from overwriting a FunP
 
 ## Chosen approach
 Use option 1. It adds a focused pure function and unit tests without changing the ledger schema or network behavior.
+
+
+## In-flight refund race
+
+A FunPay refund may be processed while the Steam trade-offer POST is still running. When the Steam response is later persisted, the code must preserve `refund_review` (or an existing final refund status) instead of replacing it with `offer_sent`, `delivery_uncertain`, or `retry_required`. If Steam returns an offer ID, persist that ID and confirmation metadata while keeping the reservation and refund-review state. Keep the network request outside `funpay_orders_lock`; reconcile the response under the lock using the latest ledger record.
