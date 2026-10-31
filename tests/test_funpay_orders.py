@@ -1191,3 +1191,31 @@ def test_filter_reserved_assets_quarantines_order_voucher_asset_collision():
     assert filtered["games"] == {"Game": {"Card": []}}
     assert filtered["total_cards"] == 0
     assert cache["games"]["Game"]["Card"] == ["12345", "23456"]
+
+
+def test_filter_reserved_assets_quarantines_all_stock_for_invalid_order_container():
+    cache = {"games": {"Game": {"Card": ["12345", "23456"]}}}
+
+    filtered = filter_reserved_assets(cache, ["not-an-order-map"], {})
+
+    assert filtered["games"] == {"Game": {"Card": []}}
+    assert filtered["total_cards"] == 0
+
+
+def test_filter_reserved_assets_quarantines_all_stock_for_invalid_voucher_container():
+    cache = {"games": {"Game": {"Card": ["12345", "23456"]}}}
+
+    filtered = filter_reserved_assets(cache, {}, ["not-a-voucher-map"])
+
+    assert filtered["games"] == {"Game": {"Card": []}}
+    assert filtered["total_cards"] == 0
+
+
+def test_filter_reserved_assets_quarantines_non_dict_order_or_voucher_records():
+    cache = {"games": {"Game": {"Card": ["12345", "23456"]}}}
+
+    bad_order = filter_reserved_assets(cache, {"bad": "not-a-record"}, {})
+    bad_voucher = filter_reserved_assets(cache, {}, {"bad": None})
+
+    assert bad_order["total_cards"] == 0
+    assert bad_voucher["total_cards"] == 0
