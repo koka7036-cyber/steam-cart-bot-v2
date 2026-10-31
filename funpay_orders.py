@@ -85,11 +85,35 @@ def restore_reserved_assets(cache: dict, reservation: dict) -> dict | None:
 
     restored = copy.deepcopy(cache)
     restored_games = restored["games"]
+
+    # An asset ID represents one Steam inventory item, so it must belong to
+    # exactly one game/card location in the cache. A prior refresh or damaged
+    # cache must not make a returned asset appear in two sets.
+    existing_locations = {}
+    for game_name, game_cards in restored_games.items():
+        if not isinstance(game_cards, dict):
+            return None
+        for card_name, card_assets in game_cards.items():
+            if not isinstance(card_assets, list):
+                return None
+            for raw_asset_id in card_assets:
+                asset_id = str(raw_asset_id)
+                if not asset_id.isdigit():
+                    return None
+                previous_location = existing_locations.get(asset_id)
+                current_location = (game_name, card_name)
+                if previous_location is not None and previous_location != current_location:
+                    return None
+                existing_locations[asset_id] = current_location
+
     for item in normalized_locations:
         game_cards = restored_games.get(item["game"], {})
         if item["game"] in restored_games and not isinstance(game_cards, dict):
             return None
         if item["card"] in game_cards and not isinstance(game_cards[item["card"]], list):
+            return None
+        previous_location = existing_locations.get(item["asset_id"])
+        if previous_location is not None and previous_location != (item["game"], item["card"]):
             return None
 
     for item in normalized_locations:
