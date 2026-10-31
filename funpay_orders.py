@@ -609,11 +609,9 @@ def filter_reserved_assets(cache_data: dict, orders: dict | None = None,
     for record in orders.values():
         if not isinstance(record, dict):
             continue
-        reservation = record.get("reservation")
-        # A terminal status does not release stock while its reservation journal
-        # still exists. Keep the cache filter consistent with cold-start blockers.
-        if record.get("status") == "cancelled" and not reservation:
+        if record.get("status") == "cancelled":
             continue
+        reservation = record.get("reservation")
         if isinstance(reservation, dict):
             reserved_ids.update(
                 str(asset_id) for asset_id in reservation.get("asset_ids", [])
@@ -697,7 +695,12 @@ def funpay_cold_start_blockers(orders: dict) -> list[tuple[str, str]]:
             blockers.append((str(key), "invalid_record"))
             continue
         status = str(record.get("status", "unknown"))
-        if status not in {"completed", "cancelled", "refunded"} or record.get("reservation"):
+        has_reservation = bool(record.get("reservation"))
+        # Cancelled orders are terminal and their stock is intentionally released
+        # by the cancellation flow; legacy reservation metadata must not block cold start.
+        if status not in {"completed", "cancelled", "refunded"} or (
+            has_reservation and status != "cancelled"
+        ):
             blockers.append((str(key), status))
     return blockers
 

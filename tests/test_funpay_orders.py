@@ -287,25 +287,6 @@ def test_filter_reserved_assets_excludes_pending_and_uncertain_offers():
     assert cache["games"]["Game"]["Card A"] == ["1", "2"]
 
 
-def test_filter_reserved_assets_keeps_cancelled_order_reservation_quarantined():
-    cache = {"games": {"Game": {"Card": ["1", "2", "3"]}}}
-    orders = {
-        "cancelled_with_reservation": {
-            "status": "cancelled",
-            "reservation": {"asset_ids": ["1"], "asset_locations": []},
-        },
-        "cancelled_without_reservation": {
-            "status": "cancelled",
-            "reservation": None,
-        },
-    }
-
-    filtered = filter_reserved_assets(cache, orders, {})
-
-    assert filtered["games"]["Game"]["Card"] == ["2", "3"]
-    assert filtered["total_cards"] == 2
-
-
 def test_filter_reserved_assets_excludes_uncertain_voucher_assets():
     cache = {"games": {"Game": {"Card": ["1", "2", "3"]}}}
     vouchers = {
@@ -391,6 +372,14 @@ def test_cold_start_allows_only_terminal_orders_without_reservations():
     assert funpay_cold_start_blockers({
         "bad": {"status": "completed", "reservation": {"asset_ids": ["1"]}}
     }) == [("bad", "completed")]
+
+
+    assert funpay_cold_start_blockers({
+        "cancelled_with_legacy_reservation": {
+            "status": "cancelled",
+            "reservation": {"asset_ids": ["123"]},
+        },
+    }) == []
 
 
 def test_inventory_cache_freshness_guard():
