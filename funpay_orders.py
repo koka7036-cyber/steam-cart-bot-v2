@@ -607,14 +607,22 @@ def filter_reserved_assets(cache_data: dict, orders: dict | None = None,
 
     reserved_ids = set()
     for record in orders.values():
-        if not isinstance(record, dict) or record.get("status") == "cancelled":
+        if not isinstance(record, dict):
             continue
         reservation = record.get("reservation")
+        # A terminal status must not release stock while the journal still
+        # carries an active reservation. This can happen after a partial
+        # recovery or a damaged/legacy record; keep the assets unavailable
+        # until the reservation is explicitly cleared.
+        if record.get("status") == "cancelled" and not isinstance(reservation, dict):
+            continue
         if isinstance(reservation, dict):
-            reserved_ids.update(
-                str(asset_id) for asset_id in reservation.get("asset_ids", [])
-                if str(asset_id)
-            )
+            asset_ids = reservation.get("asset_ids")
+            if isinstance(asset_ids, list):
+                reserved_ids.update(
+                    str(asset_id) for asset_id in asset_ids
+                    if str(asset_id)
+                )
 
     reserved_voucher_states = {"sending", "uncertain", "sent", "created_unconfirmed"}
     for voucher in vouchers.values():
