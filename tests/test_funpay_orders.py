@@ -1095,3 +1095,29 @@ def test_funpay_diagnostic_does_not_reuse_old_buyer_url_after_latest_refund():
     assert result["latest_buyer_input"]["has_trade_url"] is False
     assert "OLD_SECRET" not in repr(result)
 
+def test_filter_reserved_assets_keeps_cancelled_order_assets_reserved():
+    cache = {"games": {"Game": {"Card": ["1", "2", "3"]}}}
+    orders = {
+        "cancelled-with-reservation": {
+            "status": "cancelled",
+            "reservation": {"asset_ids": ["2"], "asset_locations": []},
+        }
+    }
+
+    filtered = filter_reserved_assets(cache, orders, {})
+
+    assert filtered["games"]["Game"]["Card"] == ["1", "3"]
+
+
+def test_filter_reserved_assets_ignores_cancelled_order_without_reservation():
+    cache = {"games": {"Game": {"Card": ["1", "2", "3"]}}}
+    orders = {
+        "cancelled-without-reservation": {
+            "status": "cancelled",
+            "reservation": None,
+        }
+    }
+
+    filtered = filter_reserved_assets(cache, orders, {})
+
+    assert filtered["games"]["Game"]["Card"] == ["1", "2", "3"]
