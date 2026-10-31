@@ -96,13 +96,19 @@ def validate_issue(issue: Mapping[str, Any]) -> QueueDecision:
         return QueueDecision(number, title, False, "invalid or oversized issue body")
 
     lowered = body.lower()
-    if any(token in lowered for token in (
-        "steam post", "live sale", "real sale", "funpay mutation",
-        "playerok mutation", "automatic delivery", "auto-start",
-        "runtime data", "order ledger", "inventory cache", "secret",
-        "credential", "deployment script",
-    )):
-        return QueueDecision(number, title, False, "issue mentions a protected operation or data area")
+    # The issue body may mention excluded operations as explicit constraints.
+    # Reject only affirmative requests to perform them, not safety statements
+    # such as "no external API calls" or "do not touch inventory".
+    prohibited_requests = (
+        r"\\b(?:perform|execute|send|submit|trigger|enable|implement|add)\\b[^.\\n]{0,100}\\bsteam\\s+post\\b",
+        r"\\b(?:perform|execute|enable|implement|add)\\b[^.\\n]{0,100}\\b(?:live|real)\\s+sales?\\b",
+        r"\\b(?:perform|execute|enable|implement|add)\\b[^.\\n]{0,100}\\b(?:funpay|playerok)\\s+mutations?\\b",
+        r"\\b(?:enable|implement|add)\\b[^.\\n]{0,100}\\bautomatic\\s+delivery\\b",
+        r"\\b(?:modify|change|read|write|delete|expose)\\b[^.\\n]{0,100}\\b(?:runtime\\s+data|order\\s+ledger|inventory\\s+cache|credentials?|secrets?)\\b",
+        r"\\b(?:modify|change|enable|install)\\b[^.\\n]{0,100}\\b(?:auto[- ]?start|deployment\\s+scripts?)\\b",
+    )
+    if any(re.search(pattern, lowered, re.I) for pattern in prohibited_requests):
+        return QueueDecision(number, title, False, "issue requests a protected operation or data change")
 
     paths = _PATH.findall(body)
     if any(_is_protected_path(path) for path in paths):
