@@ -608,6 +608,15 @@ def filter_reserved_assets(cache_data: dict, orders: dict | None = None,
     reserved_ids = set()
     malformed_reservation = False
 
+    def register_reservation_assets(asset_ids):
+        nonlocal malformed_reservation
+        # One Steam asset can belong to only one active order/voucher. If two
+        # journal records claim it, a later release could expose an already
+        # delivered item, so quarantine the stock view.
+        if any(asset_id in reserved_ids for asset_id in asset_ids):
+            malformed_reservation = True
+        reserved_ids.update(asset_ids)
+
     def collect_asset_ids(raw_ids):
         if not isinstance(raw_ids, list) or not raw_ids:
             return None
@@ -632,7 +641,7 @@ def filter_reserved_assets(cache_data: dict, orders: dict | None = None,
         if asset_ids is None:
             malformed_reservation = True
             continue
-        reserved_ids.update(asset_ids)
+        register_reservation_assets(asset_ids)
 
     reserved_voucher_states = {"sending", "uncertain", "sent", "created_unconfirmed"}
     for voucher in vouchers.values():
@@ -646,7 +655,7 @@ def filter_reserved_assets(cache_data: dict, orders: dict | None = None,
             if asset_ids is None:
                 malformed_reservation = True
                 continue
-            reserved_ids.update(asset_ids)
+            register_reservation_assets(asset_ids)
 
     if malformed_reservation:
         # A damaged active reservation makes the exact reserved IDs unknowable.
