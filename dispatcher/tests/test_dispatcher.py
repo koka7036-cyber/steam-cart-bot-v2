@@ -32,10 +32,9 @@ class DispatcherPolicyTests(unittest.TestCase):
         self.assertFalse(validate_issue(issue(labels=[{"name": "codex-ready"}, {"name": "blocked"}])).eligible)
 
     def test_rejects_protected_paths(self):
-        body = "Fix parser behavior in start.bat with tests and documentation. " * 2
-        decision = validate_issue(issue(body=body))
-        self.assertFalse(decision.eligible)
-        self.assertIn("protected", decision.reason)
+        for path in ("start.bat", ".github/workflows/unsafe.yml", "../secrets/token.txt", "data/orders.json"):
+            body = f"Fix parser behavior in {path} with tests and documentation. " * 2
+            self.assertFalse(validate_issue(issue(body=body)).eligible, path)
 
     def test_rejects_live_operations(self):
         body = (
@@ -44,11 +43,19 @@ class DispatcherPolicyTests(unittest.TestCase):
         )
         self.assertFalse(validate_issue(issue(body=body)).eligible)
 
+    def test_does_not_reject_explicit_safety_prohibitions(self):
+        body = (
+            "Implement a parser-only regression test. Do not touch inventory, runtime data, "
+            "credentials, auto-start, or perform live Steam, FunPay, or Playerok operations. "
+            "Only modify tests/test_order_parser.py."
+        )
+        self.assertTrue(validate_issue(issue(body=body)).eligible)
+
     def test_rejects_oversized_issue_body(self):
         self.assertFalse(validate_issue(issue(body="x" * 6001)).eligible)
 
     def test_rejects_non_actionable_short_issue(self):
-        self.assertFalse(validate_issue(issue(title="Improve things", body="Please improve things." )).eligible)
+        self.assertFalse(validate_issue(issue(title="Improve things", body="Please improve things.")).eligible)
 
     def test_selects_exactly_one_highest_priority_then_lowest_number(self):
         a = issue(number=10, labels=[{"name": "codex-ready"}, {"name": "priority:low"}])
@@ -59,6 +66,13 @@ class DispatcherPolicyTests(unittest.TestCase):
 
     def test_no_eligible_issues_returns_none(self):
         self.assertIsNone(select_next_task([issue(labels=[]), issue(number=2, state="closed")]))
+
+    def test_invalid_labels_fail_closed(self):
+        self.assertFalse(validate_issue(issue(labels="codex-ready")).eligible)
+
+    def test_invalid_issue_number_fails_closed(self):
+        for number in (True, 0, -1, 2_147_483_648, "5"):
+            self.assertFalse(validate_issue(issue(number=number)).eligible)
 
 
 if __name__ == "__main__":
