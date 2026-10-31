@@ -18,6 +18,10 @@ def issue(number=1, title="Add focused parser regression tests", body=None, labe
 
 
 class DispatcherPolicyTests(unittest.TestCase):
+    def test_reports_reason_for_safe_issue_fixture(self):
+        decision = validate_issue(issue())
+        self.assertTrue(decision.eligible, decision.reason)
+
     def test_accepts_only_explicitly_labeled_actionable_issue(self):
         self.assertTrue(validate_issue(issue()).eligible)
 
