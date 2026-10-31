@@ -101,6 +101,7 @@ def validate_issue(issue: Mapping[str, Any]) -> QueueDecision:
     # such as "no external API calls" or "do not touch inventory".
     prohibited_requests = (
         r"\\b(?:perform|execute|enable|implement|add)\\b[^.\\n]{0,100}\\blive\\s+sale\\b",
+        r"\\b(?:perform|execute|enable|implement|add)\\b[^.\\n]{0,100}\\blive\\s+sale\\b",
         r"\\b(?:perform|execute|send|submit|trigger|enable|implement|add)\\b[^.\\n]{0,100}\\bsteam\\s+post\\b",
         r"\\b(?:perform|execute|enable|implement|add)\\b[^.\\n]{0,100}\\b(?:live|real)\\s+sales?\\b",
         r"\\b(?:perform|execute|enable|implement|add)\\b[^.\\n]{0,100}\\b(?:funpay|playerok)\\s+mutations?\\b",
