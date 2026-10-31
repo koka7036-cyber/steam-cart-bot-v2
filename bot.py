@@ -21,6 +21,7 @@ from steam_inventory import (
     SteamInventoryPaginationError,
     SteamInventoryRateLimitError,
     collect_inventory_pages,
+    retry_after_seconds,
 )
 
 # --- КОНФИГУРАЦИЯ ---
@@ -1829,8 +1830,14 @@ def update_inventory_cache():
 
     try:
         assets, descriptions = collect_inventory_pages(fetch_inventory_page)
-    except SteamInventoryRateLimitError:
-        return None, "Steam вернул ошибку 429. Подожди 2 минуты."
+    except SteamInventoryRateLimitError as exc:
+        wait_seconds = retry_after_seconds(str(exc) or None)
+        wait_minutes = max(1, (wait_seconds + 59) // 60)
+        return None, (
+            f"Steam вернул ошибку 429. Повтори обновление не раньше чем через "
+            f"{wait_minutes} мин. (Retry-After: {wait_seconds} сек.). "
+            "Автоматических повторных запросов не выполнялось; текущий кэш не изменён."
+        )
     except SteamInventoryPaginationError as e:
         return None, str(e)
     except Exception as e:
