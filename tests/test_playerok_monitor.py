@@ -107,7 +107,7 @@ def test_monitor_awaits_async_listener_and_supports_private_router(monkeypatch):
     assert "tradeoffer/new" not in event["item_name"]
     assert "do-not-persist" not in event["item_name"]
     assert "trade_url" not in event
-    assert monitor.status()["last_sync_count"] == 1
+    assert monitor.status()["last_sync_count"] == 2
 
 
 def _install_fake_playerok_status_enums(monkeypatch):
