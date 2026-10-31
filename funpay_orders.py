@@ -966,3 +966,29 @@ def mark_input_received(record: dict, input_kind: str) -> None:
     record["input_received_at"] = int(time.time())
     record["updated_at"] = int(time.time())
     record["status"] = "input_received"
+
+
+
+
+def load_funpay_orders(path="funpay_orders.json"):
+    """Load a strict FunPay ledger; only a missing file means a fresh ledger.
+
+    Existing but unreadable or structurally invalid files must fail closed so
+    callers cannot mistake a damaged order history for an empty order book.
+    """
+    import json
+    from pathlib import Path
+
+    target = Path(path)
+    if not target.exists():
+        return {"orders": {}}
+
+    with target.open("r", encoding="utf-8") as handle:
+        data = json.load(handle)
+
+    if not isinstance(data, dict):
+        raise ValueError("Invalid FunPay order ledger structure")
+    orders = data.get("orders")
+    if not isinstance(orders, dict):
+        raise ValueError("Invalid FunPay order ledger structure")
+    return data
