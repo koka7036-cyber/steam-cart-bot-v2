@@ -770,13 +770,8 @@ from playerok_monitor import PlayerokMonitor
 
 
 def load_funpay_orders():
-    data = load_json(FP_ORDERS_FILE, {"orders": {}})
-    if not isinstance(data, dict):
-        data = {"orders": {}}
-    if not isinstance(data.get("orders"), dict):
-        data["orders"] = {}
-    return data
-
+    """Load the FunPay ledger strictly; damaged files must block operations."""
+    return load_funpay_orders_file(FP_ORDERS_FILE)
 
 def get_funpay_delivery_policy():
     """Use a Steam trade URL in chat text or one validated FunPay-hosted text attachment."""
