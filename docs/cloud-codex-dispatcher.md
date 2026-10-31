@@ -1,68 +1,50 @@
-# Cloud Codex task dispatcher — MVP
+# Cloud Codex dispatcher — current implementation
 
-## Current behavior
+The dispatcher currently supports a fail-closed read-only GitHub Issues queue,
+explicit target-file allowlists, deterministic selection of at most one issue,
+and a manual read-only preflight. It does not invoke Codex or mutate GitHub.
 
-The MVP provides a fail-closed task policy, a bounded read-only GitHub Issues
-adapter, a JSON queue inspection CLI, and a manual preflight workflow. It does
-not invoke Codex, claim issues, update labels, dispatch workflows, apply patches,
-create branches, open pull requests, or change repository state.
+## Idempotency primitives
 
-The existing `.github/workflows/cloud-codex.yml` remains unchanged and is still
-the only workflow that invokes Codex through AnyModel.
+`dispatcher/idempotency.py` adds a SQLite lease backend for local processes
+sharing the same durable database file:
+- Task key is `owner/repo#issue_number`.
+- `BEGIN IMMEDIATE` and a primary key serialize claims in one shared SQLite DB.
+- Running, completed, and failed task states are distinct.
+- A live lease cannot be claimed by another owner.
+- A completed task cannot be claimed again.
+- Failed tasks and expired leases can be reclaimed.
+- Only the lease owner can renew or finish a running task.
+- Workflow run IDs are recorded once.
 
-## Queue policy
+**Important deployment boundary:** GitHub-hosted runners have separate temporary
+filesystems. A SQLite database created under the runner workspace or temp path
+is not durable across workflow runs and is not a cross-run lock. The workflow
+does not create/use this store. Do not claim cross-run idempotency until the
+database is backed by a persistent shared volume with SQLite locking guarantees,
+or replaced by an atomic hosted store (for example, a transactional database or
+conditional-write object store). GitHub Actions `concurrency` only prevents
+overlapping runs in its group; it does not remember completed issue claims.
 
-An issue is eligible only when it is open, has the explicit `codex-ready` label,
-has no `blocked`, `needs-human`, or `do-not-automate` label, has a bounded and
-actionable description, and contains a non-empty Markdown file allowlist:
+## Safety and workflow permissions
 
-```text
-Files to change:
-- tests/test_order_parser.py
-```
+- The preflight workflow remains manual and dry-run only.
+- It declares only `contents: read` and `issues: read`.
+- No issue labels/comments are written and no workflow is dispatched.
+- Codex still has no GitHub write token.
+- No sales, marketplace mutations, runtime/order/inventory changes, secrets,
+  deployment or Windows auto-start changes are allowed.
+- No automatic merge.
 
-Only list entries immediately following this heading are treated as target
-paths. Prose references and examples elsewhere in the issue body are not paths.
-Absolute paths, parent traversal, `.git`, `.github`, and protected runtime,
-sales, inventory, credential, deployment, and startup paths are rejected.
+## Tests
 
-At most one issue is selected. Ordering is deterministic: priority label first,
-then the lowest issue number. The adapter reads at most 10 pages of 100 results;
-the CLI defaults to 2 pages. Pull requests are excluded from the Issues API
-response. No issue state is modified.
-
-## Protected scope
-
-The policy rejects target files involving GitHub workflows/permissions and
-secrets; runtime data, inventory, order ledgers, credentials, and Steam sessions;
-Steam POST, FunPay/Playerok mutations, sales and automatic delivery; deployment,
-Windows startup, and auto-start configuration.
-
-## Read-only queue inspection
-
-Run locally or in a read-only workflow:
+Run locally:
 
 ```powershell
-python -m dispatcher.queue_cli --repository owner/repo --max-pages 2 --per-page 100
+python -m unittest discover -s dispatcher/tests -v
+python -m compileall -q dispatcher
 ```
 
-For Actions, declare only `contents: read` and `issues: read`. No write
-permissions are required for queue inspection.
-
-As of 2026-10-31, the repository has no open Issues carrying `codex-ready`.
-The preflight is expected to return `no_eligible_task` until a bounded issue
-with the required explicit allowlist and label is added.
-
-## Next phases
-
-1. Add durable idempotency and a single-flight lease.
-2. Add a dispatcher on the default branch that can trigger one bounded Codex
-   run only after explicit approval.
-3. Store patches as short-lived artifacts; never execute artifact files.
-4. Validate patch size, file types, and paths in a low-privilege job.
-5. Apply only approved patch files on an isolated branch, run CI, and open Draft
-   PRs only. Never auto-merge.
-
-Stop on duplicates, concurrency conflicts, protected paths, unclear scope,
-test failures, timeout, budget exhaustion, missing permissions, or requests
-involving real sales, marketplace mutations, runtime data, or startup changes.
+SQLite concurrency tests demonstrate single-flight only for processes sharing
+one database file on a filesystem supporting SQLite locking. They do not
+simulate independent GitHub-hosted runners.
