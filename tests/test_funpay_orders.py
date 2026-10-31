@@ -349,6 +349,9 @@ def test_funpay_order_number_can_contain_letters():
     assert payment_key("123", text) == "fp-order-ABC12345"
 
 
+import pytest
+
+
 def test_fprelease_guard_blocks_funpay_refund_flag_without_offer_id():
     from funpay_orders import funpay_release_refund_block_reason
 
