@@ -122,9 +122,22 @@ def validate_issue(issue: Mapping[str, Any]) -> QueueDecision:
     if _requested_protected_operation(task_text):
         return QueueDecision(number, title, False, "issue requests a protected operation or data change")
 
-    paths = _PATH.findall(body)
-    if any(_is_protected_path(path) for path in paths):
-        return QueueDecision(number, title, False, "issue references a protected path")
+    # Only inspect an explicit allowlist block. Prose may mention protected
+    # filenames as examples or prohibitions and must not be treated as targets.
+    file_block = re.search(
+        r"(?im)^files\\s+to\\s+change\\s*:\\s*(.*?)(?=^\\S[^\\n]*:\\s*$|\\Z)",
+        body,
+        re.S,
+    )
+    if not file_block:
+        return QueueDecision(number, title, False, "missing explicit Files to change allowlist")
+    declared_paths = [
+        token.strip().strip("`'\"")
+        for token in re.split(r"[\\s,;]+", file_block.group(1))
+        if token.strip().strip("`'\"")
+    ]
+    if not declared_paths or any(_is_protected_path(path) for path in declared_paths):
+        return QueueDecision(number, title, False, "declared file path is protected or invalid")
 
     if not _WORD.search(task_text):
         return QueueDecision(number, title, False, "task is not clearly actionable")
