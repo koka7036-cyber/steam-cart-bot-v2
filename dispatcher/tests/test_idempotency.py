@@ -21,8 +21,8 @@ class IdempotencyTests(unittest.TestCase):
         self.temp.cleanup()
 
     def test_legacy_schema_is_migrated_without_losing_rows(self):
-        with sqlite3.connect(self.db) as db:
-            db.execute("DROP TABLE dispatcher_leases")
+        legacy_db = Path(self.temp.name) / "legacy.sqlite3"
+        with sqlite3.connect(legacy_db) as db:
             db.execute("""
                 CREATE TABLE dispatcher_leases (
                     task_key TEXT PRIMARY KEY,
@@ -41,9 +41,10 @@ class IdempotencyTests(unittest.TestCase):
                 "VALUES (?, ?, 'running', ?, ?, ?, 1)",
                 ("owner/repo#legacy", "legacy-worker", "2099-01-01T00:00:00Z", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z")
             )
-        migrated = SQLiteLeaseStore(self.db)
+        migrated = SQLiteLeaseStore(legacy_db)
         row = migrated.get("owner/repo#legacy")
         self.assertIsNotNone(row)
+        self.assertEqual(row["owner"], "legacy-worker")
         self.assertIsNone(row["fencing_token"])
         self.assertFalse(migrated.renew(key="owner/repo#legacy", owner="legacy-worker", fencing_token="missing-token"))
 
