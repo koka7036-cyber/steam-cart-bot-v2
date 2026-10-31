@@ -966,3 +966,39 @@ def mark_input_received(record: dict, input_kind: str) -> None:
     record["input_received_at"] = int(time.time())
     record["updated_at"] = int(time.time())
     record["status"] = "input_received"
+
+
+
+def offer_resolution_block_reason(record: dict, resolution: str) -> str | None:
+    """Explain why manual Steam-offer reconciliation must not mutate this order.
+
+    FunPay payment refunds are a separate financial event from Steam offer
+    acceptance/return. Once a refund is recorded or under review, only a
+    dedicated refund reconciliation may change that state.
+    """
+    if not isinstance(record, dict):
+        return "❌ Запись заказа повреждена или не найдена; сверка предложения заблокирована."
+
+    status = record.get("status")
+    if (
+        record.get("funpay_refunded") is True
+        or status in {"refund_review", "refunded", "refunded_cancelled"}
+    ):
+        return (
+            "❌ По заказу зафиксирован возврат FunPay или требуется сверка возврата. "
+            "Ручная сверка Steam не может менять его статус или возвращать карточки в склад. "
+            "Сначала отдельно разберись с возвратом и фактическим состоянием предложения."
+        )
+
+    if resolution not in {"accepted", "returned"}:
+        return "❌ Недопустимый результат сверки Steam. Используй accepted или returned."
+
+    if status not in {
+        "offer_sent",
+        "offer_pending_confirmation",
+        "delivery_uncertain",
+        "sending",
+    }:
+        return "❌ У заказа нет предложения, которое можно безопасно сверить."
+
+    return None
