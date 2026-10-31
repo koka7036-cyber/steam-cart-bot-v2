@@ -990,4 +990,6 @@ def load_funpay_orders(path="funpay_orders.json"):
     orders = data.get("orders")
     if not isinstance(orders, dict):
         raise ValueError("Invalid FunPay order ledger structure")
+    if any(not isinstance(record, dict) for record in orders.values()):
+        raise ValueError("Invalid FunPay order record structure")
     return data
