@@ -50,9 +50,9 @@ class SQLiteLeaseStore:
 
     def __init__(self, database: str | Path, *, timeout_seconds: float = 10.0) -> None:
         self.database = str(database)
-        self.timeout_seconds = timeout_seconds
-        if timeout_seconds <= 0:
-            raise ValueError("timeout_seconds must be positive")
+        if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, (int, float)) or timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be a positive number")
+        self.timeout_seconds = float(timeout_seconds)
         Path(self.database).parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
 
@@ -65,7 +65,7 @@ class SQLiteLeaseStore:
         )
         connection.row_factory = sqlite3.Row
         try:
-            connection.execute("PRAGMA busy_timeout = 10000")
+            connection.execute(f"PRAGMA busy_timeout = {int(self.timeout_seconds * 1000)}")
             connection.execute("PRAGMA journal_mode = WAL")
             yield connection
         finally:
@@ -73,6 +73,7 @@ class SQLiteLeaseStore:
 
     def _initialize(self) -> None:
         with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
             db.execute("""
                 CREATE TABLE IF NOT EXISTS dispatcher_leases (
                     task_key TEXT PRIMARY KEY,
@@ -104,6 +105,7 @@ class SQLiteLeaseStore:
             if "fencing_token" not in columns:
                 db.execute("ALTER TABLE dispatcher_leases ADD COLUMN fencing_token TEXT")
             db.execute("PRAGMA user_version = 1")
+            db.commit()
 
     def claim(
         self,
