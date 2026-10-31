@@ -69,6 +69,9 @@ jobs:
             printf 'base_url = "https://anymodel.org/v1"\n'
             printf 'env_key = "CODEX_API_KEY"\n'
             printf 'wire_api = "chat"\n'
+            printf '[shell_environment_policy]\n'
+            printf 'inherit = "core"\n'
+            printf 'ignore_default_excludes = false\n'
           } > "$RUNNER_TEMP/codex-home/config.toml"
 
       - name: Run one bounded task in workspace sandbox
