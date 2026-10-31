@@ -1095,3 +1095,20 @@ def test_funpay_diagnostic_does_not_reuse_old_buyer_url_after_latest_refund():
     assert result["latest_buyer_input"]["has_trade_url"] is False
     assert "OLD_SECRET" not in repr(result)
 
+
+
+def test_interrupted_delivery_recovery_quarantines_only_sending_state():
+    from funpay_orders import recover_interrupted_delivery_status
+
+    assert recover_interrupted_delivery_status("sending") == "delivery_uncertain"
+    assert recover_interrupted_delivery_status("delivery_uncertain") == "delivery_uncertain"
+    assert recover_interrupted_delivery_status("refund_review") == "refund_review"
+    assert recover_interrupted_delivery_status("refunded") == "refunded"
+    assert recover_interrupted_delivery_status("offer_sent") == "offer_sent"
+
+
+def test_interrupted_delivery_recovery_normalizes_empty_and_unknown_states():
+    from funpay_orders import recover_interrupted_delivery_status
+
+    assert recover_interrupted_delivery_status(None) == ""
+    assert recover_interrupted_delivery_status(" SENDING ") == "delivery_uncertain"
