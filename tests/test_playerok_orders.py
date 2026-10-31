@@ -288,3 +288,33 @@ def test_quantity_conflict_stays_in_manual_review_after_confirmed_event():
     assert record["mapping_conflict"] is True
     assert record["fulfillment_status"] == "needs_review"
     assert active_orders_for_chat(orders, "chat-conflict-2") == []
+
+
+def test_late_problem_event_does_not_regress_problem_resolved_deal():
+    orders = {}
+    record, _, _ = upsert_deal(
+        orders, deal_id="problem-order-1", status="PAID", item_id="item-one",
+        chat_id="problem-chat-1", sets=1, event_type="ITEM_PAID",
+    )
+    upsert_deal(
+        orders, deal_id="problem-order-1", status="DEAL_HAS_PROBLEM",
+        item_id="item-one", chat_id="problem-chat-1", sets=1,
+        event_type="DEAL_HAS_PROBLEM",
+    )
+    upsert_deal(
+        orders, deal_id="problem-order-1", status="DEAL_PROBLEM_RESOLVED",
+        item_id="item-one", chat_id="problem-chat-1", sets=1,
+        event_type="DEAL_PROBLEM_RESOLVED",
+    )
+
+    updated, created, changed = upsert_deal(
+        orders, deal_id="problem-order-1", status="DEAL_HAS_PROBLEM",
+        item_id="item-one", chat_id="problem-chat-1", sets=1,
+        event_type="DEAL_HAS_PROBLEM",
+    )
+
+    assert updated is record
+    assert created is False
+    assert changed is False
+    assert record["platform_status"] == "problem_resolved"
+    assert record["fulfillment_status"] == "manual_review"
