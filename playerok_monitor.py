@@ -139,7 +139,7 @@ class PlayerokMonitor:
             logging.error("Playerok monitor stopped (%s)", type(exc).__name__)
 
     async def _sync_open_deals(self, account: Any) -> tuple[int, str | None]:
-        """Reconcile recent seller deals across all statuses without marketplace writes."""
+        """Reconcile seller deals across all statuses without marketplace writes."""
         try:
             from PyPlayerokAPI.types.enums import ItemDealDirections
         except ImportError:
