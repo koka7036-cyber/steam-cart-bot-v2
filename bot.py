@@ -812,23 +812,15 @@ def migrate_funpay_delivery_config():
 
 
 def recover_interrupted_funpay_deliveries():
-    """Quarantine interrupted Steam requests; never retry an ambiguous POST."""
-    changed_keys = []
-    with funpay_orders_lock:
-        data = load_funpay_orders()
-        for key, record in data["orders"].items():
-            if isinstance(record, dict) and record.get("status") == "sending":
-                record["status"] = "delivery_uncertain"
-                record["updated_at"] = int(time.time())
-                record.setdefault("notes", []).append(
-                    "Бот перезапустился во время отправки Steam-предложения; повторная отправка заблокирована во избежание дубля."
-                )
-                changed_keys.append(key)
-        if changed_keys:
-            save_json(FP_ORDERS_FILE, data)
-
-    db = load_json(DB_FILE, {"admin_id": None, "vouchers": {}})
-    voucher_changes = False
+            if isinstance(record, dict):
+                recovered_status = recover_interrupted_delivery_status(record.get("status"))
+                if recovered_status != record.get("status"):
+                    record["status"] = recovered_status
+                    record["updated_at"] = int(time.time())
+                    record.setdefault("notes", []).append(
+                        "Бот перезапустился во время отправки Steam-предложения; повторная отправка заблокирована во избежание дубля."
+                    )
+                    changed_keys.append(key)
     for code, voucher in db.get("vouchers", {}).items():
         if isinstance(voucher, dict) and voucher.get("delivery_state") == "sending":
             voucher["delivery_state"] = "uncertain"
