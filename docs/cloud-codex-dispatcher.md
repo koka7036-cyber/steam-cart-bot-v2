@@ -2,57 +2,53 @@
 
 ## Current behavior
 
-This MVP adds a fail-closed task eligibility policy and a manual GitHub Actions
-preflight. It is intentionally **read-only**: it does not call the GitHub API,
-dispatch Cloud Codex, apply patches, create branches, or open pull requests.
+The MVP contains a fail-closed issue policy, a bounded read-only GitHub Issues
+adapter, a JSON queue inspection CLI, and a manual preflight workflow. It does
+not invoke Codex, claim issues, update labels, dispatch workflows, apply patches,
+create branches, open pull requests, or change repository state.
 
-The existing `.github/workflows/cloud-codex.yml` remains unchanged and continues
-to be the only workflow that invokes Codex through AnyModel.
+The existing `.github/workflows/cloud-codex.yml` remains unchanged and is still
+the only workflow that invokes Codex through AnyModel.
 
 ## Queue policy
 
-An issue is eligible only when all conditions hold:
-
-- State is `open`.
-- It carries the explicit `codex-ready` label.
-- It has no `blocked`, `needs-human`, or `do-not-automate` label.
-- Title and body are bounded and the task is clearly actionable.
-- The description does not request protected operations or data.
-- Explicit paths mentioned in the task do not point into protected areas.
+An issue is eligible only when it is open, has the explicit `codex-ready` label,
+has no `blocked`, `needs-human`, or `do-not-automate` label, has a bounded and
+actionable description, and does not request protected operations or paths.
 
 At most one issue is selected. Ordering is deterministic: priority label first,
-then the lowest issue number. No automatic claim or state mutation is made.
+then the lowest issue number. The adapter reads at most 10 pages of 100 results;
+the CLI defaults to 2 pages. Pull requests are excluded from the Issues API
+response. No issue state is modified.
 
 ## Protected scope
 
-The first iteration rejects work involving:
+The policy rejects work involving GitHub workflows/permissions and secrets;
+runtime data, inventory, order ledgers, credentials, and Steam sessions; Steam
+POST, FunPay/Playerok mutations, sales and automatic delivery; deployment,
+Windows startup, and auto-start configuration.
 
-- GitHub workflow files and CI/workflow permissions.
-- Runtime data, inventory, order ledgers, credentials, and secrets.
-- Steam POST, FunPay/Playerok mutations, sales, and automatic delivery.
-- Deployment scripts, Windows startup scripts, and auto-start configuration.
+## Read-only queue inspection
 
-The policy is deliberately conservative. False negatives are preferable to
-passing a risky task to an automated coding agent.
+Run locally or in a read-only workflow:
 
-## Run preflight
+```powershell
+python -m dispatcher.queue_cli --repository owner/repo --max-pages 2 --per-page 100
+```
 
-1. Open Actions → **Cloud Codex dispatcher preflight**.
-2. Run on `main` with `dry_run=true`.
-3. Inspect the workflow summary and tests.
-
-The `dry_run=false` option is deliberately rejected until the next phase has
-a reviewed implementation.
+For Actions, declare only `contents: read` and `issues: read`. No write
+permissions are required for queue inspection.
 
 ## Next phases
 
-1. Add a read-only GitHub Issues adapter and verify label filtering/pagination.
-2. Add durable idempotency and a single-flight lease before any Codex invocation.
-3. Connect to the existing Codex workflow through a constrained handoff.
-4. Retrieve and inspect artifacts, apply allowlisted patches on isolated branches,
-   run CI, and create Draft PRs only.
-5. Stop on any unsafe path, ambiguous patch, test failure, budget limit, or API
-   error.
+1. Add durable idempotency and a single-flight lease.
+2. Add a dispatcher on the default branch that can trigger one bounded Codex
+   run only after explicit approval.
+3. Store patches as short-lived artifacts; never execute artifact files.
+4. Validate patch size, file types, and paths in a low-privilege job.
+5. Apply only approved patch files on an isolated branch, run CI, and open Draft
+   PRs only. Never auto-merge.
 
-No phase may auto-merge, enable sales, send real marketplace operations, or
-activate Windows auto-start.
+Stop on duplicates, concurrency conflicts, protected paths, unclear scope,
+test failures, timeout, budget exhaustion, missing permissions, or requests
+involving real sales, marketplace mutations, runtime data, or startup changes.
