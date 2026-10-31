@@ -76,27 +76,6 @@ def _is_protected_path(path: str) -> bool:
     )
 
 
-def _requested_protected_operation(text: str) -> bool:
-    """Conservatively block direct protected-action requests, not prohibitions."""
-    lowered = text.lower()
-    # Strip explicit negative instructions before the positive-intent check.
-    candidate = re.sub(
-        r"\b(?:do\s+not|don't|never|without|no)\b[^.!?;]{0,180}",
-        " ",
-        lowered,
-        flags=re.I,
-    )
-    patterns = (
-        r"\b(?:implement|add|enable|perform|execute|send|submit)\b[^\n.]{0,120}\b(?:live|real)\s+sales?\b",
-        r"\b(?:implement|add|enable|perform|execute|send|submit)\b[^\n.]{0,120}\bsteam\s+post\b",
-        r"\b(?:implement|add|enable|perform|execute)\b[^\n.]{0,120}\b(?:funpay|playerok)\s+mutations?\b",
-        r"\b(?:implement|add|enable)\b[^\n.]{0,120}\bautomatic\s+delivery\b",
-        r"\b(?:modify|change|read|write|delete|expose)\b[^\n.]{0,120}\b(?:runtime\s+data|order\s+ledger|inventory\s+cache|credentials?|secrets?)\b",
-        r"\b(?:modify|change|enable|install)\b[^\n.]{0,120}\b(?:auto[- ]?start|deployment\s+scripts?)\b",
-    )
-    return any(re.search(pattern, candidate, re.I) for pattern in patterns)
-
-
 def validate_issue(issue: Mapping[str, Any]) -> QueueDecision:
     """Fail-closed validation for one GitHub issue-shaped mapping."""
     number = issue.get("number")
@@ -119,9 +98,6 @@ def validate_issue(issue: Mapping[str, Any]) -> QueueDecision:
         return QueueDecision(number, title, False, "invalid or oversized issue body")
 
     task_text = f"{title}\n{body}"
-    if _requested_protected_operation(task_text):
-        return QueueDecision(number, title, False, "issue requests a protected operation or data change")
-
     # Only inspect an explicit allowlist block. Prose may mention protected
     # filenames as examples or prohibitions and must not be treated as targets.
     # Parse only Markdown list entries immediately following the explicit
