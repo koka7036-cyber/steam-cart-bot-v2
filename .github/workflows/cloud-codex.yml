@@ -68,7 +68,7 @@ jobs:
             printf 'name = "AnyModel"\n'
             printf 'base_url = "https://anymodel.org/v1"\n'
             printf 'env_key = "CODEX_API_KEY"\n'
-            printf 'wire_api = "chat"\n'
+            printf 'wire_api = "responses"\n'
             printf '[shell_environment_policy]\n'
             printf 'inherit = "core"\n'
             printf 'ignore_default_excludes = false\n'
