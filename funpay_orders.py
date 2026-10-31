@@ -683,6 +683,22 @@ def voucher_reset_block_reason(voucher: dict) -> str | None:
     return None
 
 
+def funpay_release_refund_block_reason(record: dict) -> str | None:
+    """Prevent admin stock release while a FunPay refund is unresolved."""
+    if not isinstance(record, dict):
+        return "❌ Запись заказа повреждена или не найдена; резерв не снят."
+    if (
+        record.get("funpay_refunded") is True
+        or record.get("status") in {"refund_review", "refunded", "refunded_cancelled"}
+    ):
+        return (
+            "❌ По заказу зафиксирован возврат FunPay или требуется сверка возврата. "
+            "Команда /fprelease не может возвращать эти карточки в доступный склад; "
+            "сначала отдельно сверь фактическое состояние Steam и возврат FunPay."
+        )
+    return None
+
+
 def funpay_cold_start_blockers(orders: dict) -> list[tuple[str, str]]:
     """Return unresolved FunPay orders that must stay in the journal to protect reservations."""
     blockers = []

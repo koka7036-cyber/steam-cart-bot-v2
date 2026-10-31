@@ -349,6 +349,48 @@ def test_funpay_order_number_can_contain_letters():
     assert payment_key("123", text) == "fp-order-ABC12345"
 
 
+def test_fprelease_guard_blocks_funpay_refund_flag_without_offer_id():
+    from funpay_orders import funpay_release_refund_block_reason
+
+    record = {
+        "status": "refund_review",
+        "funpay_refunded": True,
+        "reservation": {"asset_ids": ["123"]},
+    }
+    reason = funpay_release_refund_block_reason(record)
+
+    assert isinstance(reason, str) and "возврат FunPay" in reason
+
+
+@pytest.mark.parametrize("status", ["refund_review", "refunded", "refunded_cancelled"])
+def test_fprelease_guard_blocks_refund_statuses(status):
+    from funpay_orders import funpay_release_refund_block_reason
+
+    reason = funpay_release_refund_block_reason({
+        "status": status,
+        "funpay_refunded": False,
+        "reservation": {"asset_ids": ["123"]},
+    })
+
+    assert isinstance(reason, str) and reason.strip()
+
+
+def test_fprelease_guard_allows_ordinary_unreffunded_reservation():
+    from funpay_orders import funpay_release_refund_block_reason
+
+    assert funpay_release_refund_block_reason({
+        "status": "reserved",
+        "funpay_refunded": False,
+        "reservation": {"asset_ids": ["123"]},
+    }) is None
+
+
+def test_fprelease_guard_rejects_invalid_record():
+    from funpay_orders import funpay_release_refund_block_reason
+
+    assert funpay_release_refund_block_reason(None)
+
+
 def test_cold_start_is_blocked_for_unresolved_orders_and_reservations():
     orders = {
         "completed": {"status": "completed", "reservation": None},
