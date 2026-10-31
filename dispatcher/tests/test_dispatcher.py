@@ -9,7 +9,7 @@ def issue(number=1, title="Add focused parser regression tests", body=None, labe
         "title": title,
         "body": body if body is not None else (
             "Implement a bounded regression test for the pure order parser helper. "
-            "Only change tests/test_order_parser.py; no external API calls or runtime data."
+            "Only change tests/test_order_parser.py."
         ),
         "labels": labels if labels is not None else [{"name": "codex-ready"}],
         "state": state,
