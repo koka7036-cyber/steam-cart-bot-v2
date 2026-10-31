@@ -1210,14 +1210,15 @@ def _report_funpay_input_result(admin_id, node_id, input_record, input_result, d
     if input_result == "refund_review":
         offer_id = input_record.get("steam_trade_offer_id") if input_record else None
         offer_state = (
-            f"Steam-предложение #{offer_id} создано."
+            f"ID Steam-предложения: #{offer_id}."
             if offer_id else
-            "Результат создания Steam-предложения не подтверждён."
+            "ID Steam-предложения не получен."
         )
+        delivery_detail = f" Ответ Steam: {str(detail)[:240]}" if detail else ""
         bot.send_message(
             admin_id,
             f"🚨 FunPay: по заказу {order_label} поступил возврат во время отправки. "
-            f"{offer_state} Заказ оставлен в refund_review, резерв не снят. "
+            f"{offer_state}{delivery_detail} Заказ оставлен в refund_review, резерв не снят. "
             "Повторная отправка заблокирована; требуется ручная сверка FunPay и Steam."
         )
     elif input_result == "offer_sent":
