@@ -969,7 +969,6 @@ def mark_input_received(record: dict, input_kind: str) -> None:
 
 
 
-
 def load_funpay_orders(path="funpay_orders.json"):
     """Load a strict FunPay ledger; only a missing file means a fresh ledger.
 

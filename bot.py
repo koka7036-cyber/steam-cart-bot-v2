@@ -773,6 +773,7 @@ def load_funpay_orders():
     """Load the FunPay ledger strictly; damaged files must block operations."""
     return load_funpay_orders_file(FP_ORDERS_FILE)
 
+
 def get_funpay_delivery_policy():
     """Use a Steam trade URL in chat text or one validated FunPay-hosted text attachment."""
     cfg = load_json(FP_CONFIG_FILE, {})
