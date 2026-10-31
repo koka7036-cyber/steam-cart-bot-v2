@@ -374,6 +374,47 @@ def test_cold_start_allows_only_terminal_orders_without_reservations():
     }) == [("bad", "completed")]
 
 
+def test_inventory_cache_asset_integrity_accepts_unique_asset_ids():
+    from funpay_orders import inventory_cache_asset_integrity_error
+
+    assert inventory_cache_asset_integrity_error({
+        "games": {
+            "Game A": {"Card A": ["101"], "Card B": ["102"]},
+            "Game B": {"Card C": ["103"]},
+        }
+    }) is None
+
+
+def test_inventory_cache_asset_integrity_rejects_duplicate_across_cards():
+    from funpay_orders import inventory_cache_asset_integrity_error
+
+    error = inventory_cache_asset_integrity_error({
+        "games": {"Game": {"Card A": ["101"], "Card B": ["101"]}}
+    })
+
+    assert error and "101" in error
+
+
+def test_inventory_cache_asset_integrity_rejects_duplicate_within_one_card():
+    from funpay_orders import inventory_cache_asset_integrity_error
+
+    error = inventory_cache_asset_integrity_error({
+        "games": {"Game": {"Card A": ["101", "101"]}}
+    })
+
+    assert error and "101" in error
+
+
+def test_inventory_cache_freshness_guard_rejects_duplicate_asset_ids():
+    now = 1_800_000_000
+    error = inventory_cache_freshness_error({
+        "updated_at": now,
+        "games": {"Game": {"Card A": ["101"], "Card B": ["101"]}},
+    }, now=now)
+
+    assert error and "101" in error
+
+
 def test_inventory_cache_freshness_guard():
     now = 1_800_000_000
     assert inventory_cache_freshness_error({"updated_at": now, "games": {}}, now=now) is None

@@ -722,11 +722,43 @@ def funpay_cold_start_blockers(orders: dict) -> list[tuple[str, str]]:
     return blockers
 
 
+def inventory_cache_asset_integrity_error(cache_data: dict) -> str | None:
+    """Reject malformed cache entries or repeated Steam asset IDs before counting or delivery."""
+    if not isinstance(cache_data, dict):
+        return "Кэш склада повреждён: неверный формат."
+    games = cache_data.get("games")
+    if not isinstance(games, dict):
+        return "Кэш склада повреждён: отсутствует список игр."
+    seen_asset_ids = set()
+    for game_name, cards in games.items():
+        if not isinstance(cards, dict):
+            return f"Кэш склада повреждён: некорректная структура игры {game_name!r}."
+        for card_name, asset_ids in cards.items():
+            if not isinstance(asset_ids, list):
+                return f"Кэш склада повреждён: некорректный список карточки {card_name!r}."
+            for raw_asset_id in asset_ids:
+                if isinstance(raw_asset_id, bool) or not isinstance(raw_asset_id, (str, int)):
+                    return "Кэш склада повреждён: некорректный Steam asset ID."
+                asset_id = str(raw_asset_id).strip()
+                if not asset_id.isdigit():
+                    return "Кэш склада повреждён: некорректный Steam asset ID."
+                if asset_id in seen_asset_ids:
+                    return (
+                        f"Кэш склада повреждён: Steam asset ID {asset_id} встречается "
+                        "более одного раза. Обнови кэш Steam перед выдачей."
+                    )
+                seen_asset_ids.add(asset_id)
+    return None
+
+
 def inventory_cache_freshness_error(cache_data: dict, now: float | None = None,
                                     max_age_seconds: int = 6 * 60 * 60) -> str | None:
     """Fail closed when available-card counts come from a missing, future or stale cache."""
     if not isinstance(cache_data, dict):
         return "Кэш склада повреждён. Обнови кэш склада перед выдачей."
+    integrity_error = inventory_cache_asset_integrity_error(cache_data)
+    if integrity_error:
+        return integrity_error
     updated_at = cache_data.get("updated_at")
     if not isinstance(updated_at, (int, float)) or isinstance(updated_at, bool) or updated_at <= 0:
         return "У кэша склада нет достоверного времени обновления. Нажми «🔄 Обновить кэш склада»."
