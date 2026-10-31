@@ -22,7 +22,7 @@ concurrency:
 jobs:
   codex:
     if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     timeout-minutes: 20
     steps:
       - name: Checkout main without persisted Git credentials
@@ -74,6 +74,21 @@ jobs:
             printf 'ignore_default_excludes = false\n'
           } > "$RUNNER_TEMP/codex-home/config.toml"
 
+      - name: Preflight macOS Seatbelt before using the API key
+        env:
+          CODEX_HOME: ${{ runner.temp }}/codex-home
+        run: |
+          set -euo pipefail
+          if [[ "$(uname -s)" != "Darwin" ]]; then
+            echo "Expected a macOS runner for the Seatbelt sandbox" >&2
+            exit 1
+          fi
+          if [[ ! -x /usr/bin/sandbox-exec ]]; then
+            echo "macOS sandbox-exec is unavailable; refusing to start Codex" >&2
+            exit 1
+          fi
+          codex sandbox macos /usr/bin/true
+
       - name: Run one bounded task in workspace sandbox
         env:
           CODEX_HOME: ${{ runner.temp }}/codex-home
@@ -91,7 +106,7 @@ jobs:
           Do exactly one bounded task described below. Do not access, print, search for, or modify credentials, environment files, runtime data, order records, inventory, Steam sessions, marketplace integrations, deployment scripts, or startup configuration.
           Do not make network calls except the configured model API. Do not attempt real Steam, FunPay, or Playerok actions. Do not commit, push, create branches, or open pull requests.
           Prefer a minimal change. Run only relevant offline tests that are already available. If the task requires touching any prohibited area or cannot be completed safely, stop and explain why.
-          
+
           TASK:
           PROMPT
           printf '%s\n' "$TASK" >> "$RUNNER_TEMP/task-prompt.txt"
