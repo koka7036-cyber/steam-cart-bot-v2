@@ -1,6 +1,8 @@
 """Safe pagination for the Steam Community inventory endpoint."""
 from collections.abc import Callable
 from typing import Any
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 
 
 class SteamInventoryPaginationError(RuntimeError):
@@ -113,11 +115,7 @@ def collect_inventory_pages(
     )
 
 
-"""Helpers for safe Steam inventory rate-limit guidance."""
-from __future__ import annotations
-
-from datetime import datetime, timezone
-from email.utils import parsedate_to_datetime
+# Retry-After parsing helpers are kept in this module to remain dependency-free.
 
 
 DEFAULT_RETRY_AFTER_SECONDS = 120
