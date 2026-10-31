@@ -755,7 +755,7 @@ def send_funpay_chat_message(node_id, text):
         return False, f"Ошибка отправки: {e}"
 
 from order_parser import detect_order_sets_and_quantity, is_funpay_refund_notification, is_paid_order_notification
-from funpay_orders import (compact_funpay_text, decode_text_attachment, download_text_attachment, extract_order_number, extract_steam_trade_url, extract_text_attachment_href, filter_reserved_assets, find_open_order_for_chat, funpay_cold_start_blockers, funpay_input_signature, inventory_cache_freshness_error, mark_input_received, open_orders_for_chat, parse_funpay_history_payload, register_payment, message_signature, restore_reserved_assets, summarize_funpay_chat_diagnostics, voucher_redemption_block_reason, voucher_reset_block_reason)
+from funpay_orders import (compact_funpay_text, decode_text_attachment, download_text_attachment, extract_order_number, extract_steam_trade_url, extract_text_attachment_href, filter_reserved_assets, find_open_order_for_chat, funpay_cold_start_blockers, funpay_input_signature, inventory_cache_freshness_error, mark_input_received, offer_resolution_block_reason, open_orders_for_chat, parse_funpay_history_payload, register_payment, message_signature, restore_reserved_assets, summarize_funpay_chat_diagnostics, voucher_redemption_block_reason, voucher_reset_block_reason)
 from sales_analytics import summarize_sales
 from playerok_orders import (
     active_orders_for_chat,
@@ -2852,10 +2852,9 @@ def funpay_offer_resolve_cmd(message):
         if not isinstance(record, dict):
             bot.send_message(message.chat.id, "❌ Заказ не найден.")
             return
-        if record.get("status") not in {
-            "offer_sent", "offer_pending_confirmation", "delivery_uncertain", "sending"
-        }:
-            bot.send_message(message.chat.id, "❌ У заказа нет предложения, которое нужно сверить.")
+        block_reason = offer_resolution_block_reason(record, resolution)
+        if block_reason:
+            bot.send_message(message.chat.id, block_reason)
             return
         if resolution == "accepted":
             record["reservation"] = None
