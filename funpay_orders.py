@@ -1002,3 +1002,27 @@ def offer_resolution_block_reason(record: dict, resolution: str) -> str | None:
         return "❌ У заказа нет предложения, которое можно безопасно сверить."
 
     return None
+
+
+
+def funpay_delivery_result_status(record: dict, outcome: str) -> str:
+    """Map a Steam POST result without overwriting a concurrent FunPay refund.
+
+    The refund event and Steam delivery result are independent. A refund that
+    lands while the network request is in flight must remain visible for manual
+    reconciliation, even when Steam subsequently confirms an offer ID.
+    """
+    if not isinstance(record, dict):
+        return "refund_review"
+
+    current_status = record.get("status")
+    if current_status in {"refunded", "refunded_cancelled"}:
+        return current_status
+    if record.get("funpay_refunded") or current_status == "refund_review":
+        return "refund_review"
+
+    return {
+        "sent": "offer_sent",
+        "created_unconfirmed": "offer_pending_confirmation",
+        "unknown": "delivery_uncertain",
+    }.get(outcome, "retry_required")
