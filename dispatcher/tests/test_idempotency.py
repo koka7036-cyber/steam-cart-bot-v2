@@ -1,3 +1,4 @@
+from contextlib import closing
 import sqlite3
 import tempfile
 import threading
@@ -22,25 +23,26 @@ class IdempotencyTests(unittest.TestCase):
 
     def test_legacy_schema_is_migrated_without_losing_rows(self):
         legacy_db = Path(self.temp.name) / "legacy.sqlite3"
-        with sqlite3.connect(legacy_db) as db:
-            db.execute("""
-                CREATE TABLE dispatcher_leases (
-                    task_key TEXT PRIMARY KEY,
-                    owner TEXT NOT NULL,
-                    status TEXT NOT NULL CHECK (status IN ('running','completed','failed')),
-                    lease_expires_at TEXT,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    attempt INTEGER NOT NULL DEFAULT 1,
-                    last_error TEXT
+        with closing(sqlite3.connect(legacy_db)) as db:
+            with db:
+                db.execute("""
+                    CREATE TABLE dispatcher_leases (
+                        task_key TEXT PRIMARY KEY,
+                        owner TEXT NOT NULL,
+                        status TEXT NOT NULL CHECK (status IN ('running','completed','failed')),
+                        lease_expires_at TEXT,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL,
+                        attempt INTEGER NOT NULL DEFAULT 1,
+                        last_error TEXT
+                    )
+                """)
+                db.execute(
+                    "INSERT INTO dispatcher_leases "
+                    "(task_key, owner, status, lease_expires_at, created_at, updated_at, attempt) "
+                    "VALUES (?, ?, 'running', ?, ?, ?, 1)",
+                    ("owner/repo#legacy", "legacy-worker", "2099-01-01T00:00:00Z", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z")
                 )
-            """)
-            db.execute(
-                "INSERT INTO dispatcher_leases "
-                "(task_key, owner, status, lease_expires_at, created_at, updated_at, attempt) "
-                "VALUES (?, ?, 'running', ?, ?, ?, 1)",
-                ("owner/repo#legacy", "legacy-worker", "2099-01-01T00:00:00Z", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z")
-            )
         migrated = SQLiteLeaseStore(legacy_db)
         row = migrated.get("owner/repo#legacy")
         self.assertIsNotNone(row)
@@ -125,11 +127,12 @@ class IdempotencyTests(unittest.TestCase):
 
     def test_expired_owner_cannot_finish_after_lease_expiry(self):
         old_claim = self.store.claim(key="owner/repo#9", owner="run-old")
-        with sqlite3.connect(self.db) as db:
-            db.execute(
-                "UPDATE dispatcher_leases SET lease_expires_at = ? WHERE task_key = ?",
-                ("2000-01-01T00:00:00Z", "owner/repo#9"),
-            )
+        with closing(sqlite3.connect(self.db)) as db:
+            with db:
+                db.execute(
+                    "UPDATE dispatcher_leases SET lease_expires_at = ? WHERE task_key = ?",
+                    ("2000-01-01T00:00:00Z", "owner/repo#9"),
+                )
         reclaimed = self.store.claim(key="owner/repo#9", owner="run-new")
         self.assertTrue(reclaimed.acquired)
         self.assertFalse(self.store.finish(key="owner/repo#9", owner="run-old", fencing_token=old_claim.fencing_token, success=True))
@@ -137,8 +140,9 @@ class IdempotencyTests(unittest.TestCase):
 
     def test_same_owner_stale_attempt_is_fenced_after_reclaim(self):
         old = self.store.claim(key="owner/repo#10", owner="stable-worker")
-        with sqlite3.connect(self.db) as db:
-            db.execute("UPDATE dispatcher_leases SET lease_expires_at = ? WHERE task_key = ?", ("2000-01-01T00:00:00Z", "owner/repo#10"))
+        with closing(sqlite3.connect(self.db)) as db:
+            with db:
+                db.execute("UPDATE dispatcher_leases SET lease_expires_at = ? WHERE task_key = ?", ("2000-01-01T00:00:00Z", "owner/repo#10"))
         new = self.store.claim(key="owner/repo#10", owner="stable-worker")
         self.assertNotEqual(old.fencing_token, new.fencing_token)
         self.assertFalse(self.store.finish(key="owner/repo#10", owner="stable-worker", fencing_token=old.fencing_token, success=True))
