@@ -87,7 +87,7 @@ jobs:
             echo "macOS sandbox-exec is unavailable; refusing to start Codex" >&2
             exit 1
           fi
-          codex sandbox macos /usr/bin/true
+          codex sandbox macos -- /usr/bin/true
 
       - name: Run one bounded task in workspace sandbox
         env:
