@@ -50,7 +50,7 @@ jobs:
       - name: Install Codex CLI
         run: |
           set -euo pipefail
-          npm install --global @openai/codex
+          npm install --global @openai/codex@0.166.0
           codex --version
 
       - name: Configure AnyModel provider
