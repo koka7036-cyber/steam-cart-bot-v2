@@ -20,6 +20,38 @@ class IdempotencyTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
+    def test_legacy_schema_is_migrated_without_losing_rows(self):
+        with sqlite3.connect(self.db) as db:
+            db.execute("DROP TABLE dispatcher_leases")
+            db.execute("""
+                CREATE TABLE dispatcher_leases (
+                    task_key TEXT PRIMARY KEY,
+                    owner TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK (status IN ('running','completed','failed')),
+                    lease_expires_at TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    attempt INTEGER NOT NULL DEFAULT 1,
+                    last_error TEXT
+                )
+            """)
+            db.execute(
+                "INSERT INTO dispatcher_leases "
+                "(task_key, owner, status, lease_expires_at, created_at, updated_at, attempt) "
+                "VALUES (?, ?, 'running', ?, ?, ?, 1)",
+                ("owner/repo#legacy", "legacy-worker", "2099-01-01T00:00:00Z", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z")
+            )
+        migrated = SQLiteLeaseStore(self.db)
+        row = migrated.get("owner/repo#legacy")
+        self.assertIsNotNone(row)
+        self.assertIsNone(row["fencing_token"])
+        self.assertFalse(migrated.renew(key="owner/repo#legacy", owner="legacy-worker", fencing_token="missing-token"))
+
+    def test_sqlite_integrity_check_is_ok(self):
+        with self.store._connect() as db:
+            result = db.execute("PRAGMA integrity_check").fetchone()[0]
+        self.assertEqual(result, "ok")
+
     def test_task_key_is_stable_and_normalized(self):
         self.assertEqual(task_key("Owner/Repo", 42), "owner/repo#42")
 
