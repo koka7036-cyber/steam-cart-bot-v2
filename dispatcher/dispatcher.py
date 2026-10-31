@@ -125,7 +125,7 @@ def validate_issue(issue: Mapping[str, Any]) -> QueueDecision:
     # Only inspect an explicit allowlist block. Prose may mention protected
     # filenames as examples or prohibitions and must not be treated as targets.
     file_block = re.search(
-        r"(?im)^files\\s+to\\s+change\\s*:\\s*(.*?)(?=^\\S[^\\n]*:\\s*$|\\Z)",
+        r"(?im)^files\s+to\s+change\s*:\s*(.*?)(?=^\S[^\n]*:\s*$|\Z)",
         body,
         re.S,
     )
@@ -133,7 +133,7 @@ def validate_issue(issue: Mapping[str, Any]) -> QueueDecision:
         return QueueDecision(number, title, False, "missing explicit Files to change allowlist")
     declared_paths = [
         token.strip().strip("`'\"")
-        for token in re.split(r"[\\s,;]+", file_block.group(1))
+        for token in re.split(r"[\s,;]+", file_block.group(1))
         if token.strip().strip("`'\"")
     ]
     if not declared_paths or any(_is_protected_path(path) for path in declared_paths):
