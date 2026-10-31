@@ -101,10 +101,10 @@ def restore_reserved_assets(cache: dict, reservation: dict) -> dict | None:
                 if not asset_id.isdigit():
                     return None
                 previous_location = existing_locations.get(asset_id)
-                current_location = (game_name, card_name)
-                if previous_location is not None and previous_location != current_location:
+                if previous_location is not None:
+                    # Even a duplicate in the same card list inflates set counts.
                     return None
-                existing_locations[asset_id] = current_location
+                existing_locations[asset_id] = (game_name, card_name)
 
     for item in normalized_locations:
         game_cards = restored_games.get(item["game"], {})

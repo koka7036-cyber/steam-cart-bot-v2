@@ -1162,3 +1162,20 @@ def test_restore_reserved_assets_keeps_same_location_restore_idempotent():
     assert restored["games"]["Game"]["Card A"] == ["101"]
     assert restored["total_cards"] == 1
 
+def test_restore_reserved_assets_rejects_duplicate_asset_id_within_same_card_list():
+    from funpay_orders import restore_reserved_assets
+
+    cache = {
+        "games": {"Game": {"Card A": ["101", "101"]}},
+        "total_cards": 2,
+    }
+    reservation = {
+        "asset_ids": ["102"],
+        "asset_locations": [
+            {"game": "Game", "card": "Card B", "asset_id": "102"}
+        ],
+    }
+
+    assert restore_reserved_assets(cache, reservation) is None
+    assert cache["games"]["Game"]["Card A"] == ["101", "101"]
+
