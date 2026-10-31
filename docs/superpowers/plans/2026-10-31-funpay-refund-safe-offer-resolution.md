@@ -43,22 +43,36 @@
   - Add tests proving eligible statuses `offer_sent`, `offer_pending_confirmation`, `delivery_uncertain`, and `sending` return `None` for both valid resolutions.
   - Add a test proving unsupported resolution is rejected.
 
-- [ ] **Step 2: Run the focused test and verify RED**
+- [x] **Step 2: Run the focused test and verify RED**
   - Run: `python -m pytest -q`
   - Expected: 17 new cases fail with ImportError because `offer_resolution_block_reason` does not exist yet; 156 existing tests pass.
 
-- [ ] **Step 3: Implement the pure guard**
+- [x] **Step 3: Implement the pure guard**
   - In `funpay_orders.py`, return a non-empty Russian block reason for a non-dict record, unsupported resolution, a true refund flag, or a refund/refund-review status.
   - Return `None` only for `accepted` or `returned` when status is one of the four existing offer-resolution statuses and no refund marker exists.
 
-- [ ] **Step 4: Integrate the guard**
+- [x] **Step 4: Integrate the guard**
   - Import the helper in `bot.py`.
   - In `funpay_offer_resolve_cmd`, call it after loading the record and while still inside `funpay_orders_lock`; send its block reason and return before changing reservation, offer ID, or status.
 
-- [ ] **Step 5: Run verification**
+- [x] **Step 5: Run verification**
   - Run: `pytest -q`
   - Expected: full suite passes — 173 passed.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
   - Commit the guard and integration with message `fix: block offer resolution after FunPay refunds`.
 
+
+
+### Task 2: Preserve refund state across an in-flight Steam request
+
+**Files:** `funpay_orders.py`, `bot.py`, `tests/test_funpay_orders.py`
+
+**Interface:** `funpay_delivery_result_status(record: dict, outcome: str) -> str`
+
+- [x] Add parametrized tests for all four Steam outcomes with refund-review, late refund flag, final refund statuses, and ordinary status mapping.
+- [x] Verify RED on the test-only commit: 32 new cases failed to import the missing helper while 173 existing tests passed.
+- [x] Add a pure helper that preserves refund-review and final refund states.
+- [x] Apply the helper when persisting the Steam response under the existing order lock.
+- [x] Add an administrator warning when the refund overlaps an in-flight delivery.
+- [ ] Run final CI on the latest commit and review the final diff.
