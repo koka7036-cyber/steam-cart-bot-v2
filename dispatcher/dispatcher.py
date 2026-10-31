@@ -1,8 +1,7 @@
-"""Read-only task queue policy for the Cloud Codex dispatcher.
+"""Read-only queue policy for the Cloud Codex dispatcher.
 
-This module deliberately does not call GitHub, start workflows, execute Codex,
-or modify the repository. It validates issue-like records supplied by a
-separate, least-privilege adapter.
+This module validates GitHub issue-shaped records supplied by a separate
+read-only adapter. It never calls GitHub, executes Codex, or mutates state.
 """
 from __future__ import annotations
 
@@ -38,7 +37,7 @@ MAX_ISSUE_BODY_CHARS = 6000
 MAX_ISSUE_NUMBER = 2_147_483_647
 
 _WORD = re.compile(r"\b(?:implement|fix|add|refactor|test|document|audit)\b", re.I)
-_PATH = re.compile(r"(?:^|\s)([A-Za-z0-9_./-]+\.[A-Za-z0-9_-]+)(?:$|\s|[,;:])")
+_PATH = re.compile(r"(?:^|\s)([A-Za-z0-9_./-]+(?:\.[A-Za-z0-9_-]+)?)(?:$|\s|[,;:])")
 
 
 @dataclass(frozen=True)
@@ -52,6 +51,8 @@ class QueueDecision:
 
 def _labels(issue: Mapping[str, Any]) -> set[str]:
     raw = issue.get("labels") or []
+    if not isinstance(raw, (list, tuple)):
+        return set()
     result: set[str] = set()
     for label in raw:
         if isinstance(label, str):
@@ -62,16 +63,36 @@ def _labels(issue: Mapping[str, Any]) -> set[str]:
 
 
 def _is_protected_path(path: str) -> bool:
-    normalized = path.replace("\\", "/").strip().lower().lstrip("./")
+    normalized = path.replace("\\", "/").strip().lower()
     if not normalized or normalized.startswith("/"):
         return True
     parts = normalized.split("/")
     if any(part in {"..", ".git", ".github"} for part in parts):
         return True
+    normalized = normalized.lstrip("./")
     return any(
         normalized == item or normalized.startswith(item.rstrip("/") + "/")
         for item in PROTECTED_PATHS
     )
+
+
+def _requested_protected_operation(text: str) -> bool:
+    """Conservative intent check; merely forbidding these operations is allowed."""
+    lowered = text.lower()
+    # An explicit positive request for live marketplace activity.
+    if re.search(r"\b(?:implement|add|enable|perform|execute|send|submit)\b[^\n.]{0,120}\b(?:live|real)\s+sales?\b", lowered):
+        return True
+    if re.search(r"\b(?:implement|add|enable|perform|execute|send|submit)\b[^\n.]{0,120}\bsteam\s+post\b", lowered):
+        return True
+    if re.search(r"\b(?:implement|add|enable|perform|execute)\b[^\n.]{0,120}\b(?:funpay|playerok)\s+mutations?\b", lowered):
+        return True
+    if re.search(r"\b(?:implement|add|enable)\b[^\n.]{0,120}\bautomatic\s+delivery\b", lowered):
+        return True
+    if re.search(r"\b(?:modify|change|read|write|delete|expose)\b[^\n.]{0,120}\b(?:runtime\s+data|order\s+ledger|inventory\s+cache|credentials?|secrets?)\b", lowered):
+        return True
+    if re.search(r"\b(?:modify|change|enable|install)\b[^\n.]{0,120}\b(?:auto[- ]?start|deployment\s+scripts?)\b", lowered):
+        return True
+    return False
 
 
 def validate_issue(issue: Mapping[str, Any]) -> QueueDecision:
@@ -95,32 +116,15 @@ def validate_issue(issue: Mapping[str, Any]) -> QueueDecision:
     if not isinstance(body, str) or len(body) > MAX_ISSUE_BODY_CHARS:
         return QueueDecision(number, title, False, "invalid or oversized issue body")
 
-    lowered = body.lower()
-    # The issue body may mention excluded operations as explicit constraints.
-    # Reject only affirmative requests to perform them, not safety statements
-    # such as "no external API calls" or "do not touch inventory".
-    if "steam post" in lowered and re.search(r"\b(live|real)\s+sales?\b", lowered):
-        return QueueDecision(number, title, False, "issue requests a live sale operation")
-    prohibited_requests = (
-        r"\\b(?:perform|execute|enable|implement|add)\\b[^.\\n]{0,100}\\blive\\s+sale\\b",
-        r"\\b(?:perform|execute|enable|implement|add)\\b[^.\\n]{0,100}\\blive\\s+sale\\b",
-        r"\\b(?:perform|execute|send|submit|trigger|enable|implement|add)\\b[^.\\n]{0,100}\\bsteam\\s+post\\b",
-        r"\\b(?:perform|execute|enable|implement|add)\\b[^.\\n]{0,100}\\b(?:live|real)\\s+sales?\\b",
-        r"\\b(?:perform|execute|enable|implement|add)\\b[^.\\n]{0,100}\\b(?:funpay|playerok)\\s+mutations?\\b",
-        r"\\b(?:enable|implement|add)\\b[^.\\n]{0,100}\\bautomatic\\s+delivery\\b",
-        r"\\b(?:modify|change|read|write|delete|expose)\\b[^.\\n]{0,100}\\b(?:runtime\\s+data|order\\s+ledger|inventory\\s+cache|credentials?|secrets?)\\b",
-        r"\\b(?:modify|change|enable|install)\\b[^.\\n]{0,100}\\b(?:auto[- ]?start|deployment\\s+scripts?)\\b",
-    )
-    if any(re.search(pattern, lowered, re.I) for pattern in prohibited_requests):
+    task_text = f"{title}\n{body}"
+    if _requested_protected_operation(task_text):
         return QueueDecision(number, title, False, "issue requests a protected operation or data change")
 
     paths = _PATH.findall(body)
     if any(_is_protected_path(path) for path in paths):
         return QueueDecision(number, title, False, "issue references a protected path")
 
-    # Require a bounded, actionable task statement. A generic request is not
-    # safe to pass to an automated coding agent.
-    if not _WORD.search(title + "\n" + body):
+    if not _WORD.search(task_text):
         return QueueDecision(number, title, False, "task is not clearly actionable")
     if len(body.strip()) < 80:
         return QueueDecision(number, title, False, "task description is too short to define scope")
@@ -137,8 +141,7 @@ def validate_issue(issue: Mapping[str, Any]) -> QueueDecision:
 
 def select_next_task(issues: Iterable[Mapping[str, Any]]) -> QueueDecision | None:
     """Choose one issue deterministically; never dispatch more than one."""
-    decisions = [validate_issue(issue) for issue in issues]
-    eligible = [decision for decision in decisions if decision.eligible]
+    eligible = [decision for decision in (validate_issue(item) for item in issues) if decision.eligible]
     if not eligible:
         return None
     eligible.sort(key=lambda item: (-item.priority, item.issue_number))
