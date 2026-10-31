@@ -220,3 +220,33 @@ def test_collect_inventory_pages_rejects_assets_without_class_or_instance_id():
                 "more_items": 0,
             }
         )
+
+
+def test_retry_after_seconds_accepts_delta_seconds():
+    from steam_inventory import retry_after_seconds
+
+    assert retry_after_seconds("45") == 45
+
+
+def test_retry_after_seconds_accepts_http_date():
+    from datetime import datetime, timezone
+    from steam_inventory import retry_after_seconds
+
+    now = datetime(2026, 11, 1, 10, 0, 0, tzinfo=timezone.utc)
+    assert retry_after_seconds("Sun, 01 Nov 2026 10:02:30 GMT", now=now) == 150
+
+
+def test_retry_after_seconds_uses_default_for_missing_or_invalid_value():
+    from steam_inventory import DEFAULT_RETRY_AFTER_SECONDS, retry_after_seconds
+
+    assert retry_after_seconds(None) == DEFAULT_RETRY_AFTER_SECONDS
+    assert retry_after_seconds("not-a-date") == DEFAULT_RETRY_AFTER_SECONDS
+
+
+def test_retry_after_seconds_clamps_extreme_values():
+    from steam_inventory import MAX_RETRY_AFTER_SECONDS, retry_after_seconds
+
+    assert retry_after_seconds("999999") == MAX_RETRY_AFTER_SECONDS
+    assert retry_after_seconds("-10") == 1
+
+
