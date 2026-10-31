@@ -602,11 +602,19 @@ def filter_reserved_assets(cache_data: dict, orders: dict | None = None,
     """Return a stock cache with assets belonging to pending/uncertain offers removed."""
     if not isinstance(cache_data, dict):
         return {}
-    orders = orders if isinstance(orders, dict) else {}
-    vouchers = vouchers if isinstance(vouchers, dict) else {}
+    malformed_reservation = False
+    if orders is None:
+        orders = {}
+    elif not isinstance(orders, dict):
+        malformed_reservation = True
+        orders = {}
+    if vouchers is None:
+        vouchers = {}
+    elif not isinstance(vouchers, dict):
+        malformed_reservation = True
+        vouchers = {}
 
     reserved_ids = set()
-    malformed_reservation = False
 
     def register_reservation_assets(asset_ids):
         nonlocal malformed_reservation
@@ -629,7 +637,10 @@ def filter_reserved_assets(cache_data: dict, orders: dict | None = None,
         return normalized
 
     for record in orders.values():
-        if not isinstance(record, dict) or record.get("status") == "cancelled":
+        if not isinstance(record, dict):
+            malformed_reservation = True
+            continue
+        if record.get("status") == "cancelled":
             continue
         reservation = record.get("reservation")
         if reservation is None:
@@ -646,6 +657,7 @@ def filter_reserved_assets(cache_data: dict, orders: dict | None = None,
     reserved_voucher_states = {"sending", "uncertain", "sent", "created_unconfirmed"}
     for voucher in vouchers.values():
         if not isinstance(voucher, dict):
+            malformed_reservation = True
             continue
         has_reserved_delivery = voucher.get("delivery_state") in reserved_voucher_states or (
             voucher.get("used") and voucher.get("trade_offer_id")
