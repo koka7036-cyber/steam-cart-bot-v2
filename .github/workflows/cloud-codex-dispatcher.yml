@@ -1,0 +1,61 @@
+name: Cloud Codex dispatcher preflight
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Validate the eligible queue without invoking Codex
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  issues: read
+  actions: read
+
+concurrency:
+  group: cloud-codex-dispatcher-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout the default branch without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Validate dispatcher policy
+        run: |
+          set -euo pipefail
+          python -m unittest discover -s dispatcher/tests -v
+          python -m compileall -q dispatcher
+
+      - name: Report preflight boundary
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          if [[ "$DRY_RUN" != "true" ]]; then
+            echo "::error::Only dry-run preflight is implemented in this MVP."
+            exit 1
+          fi
+          {
+            echo "## Cloud Codex dispatcher preflight"
+            echo "- Mode: read-only dry run"
+            echo "- Codex invocation: disabled"
+            echo "- GitHub write permission: not granted"
+            echo "- Sales and delivery actions: prohibited"
+            echo "- Automatic PR creation/merge: disabled"
+          } >> "$GITHUB_STEP_SUMMARY"
