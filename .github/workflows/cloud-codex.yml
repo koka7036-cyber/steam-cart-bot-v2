@@ -95,7 +95,7 @@ jobs:
           TASK:
           PROMPT
           printf '%s\n' "$TASK" >> "$RUNNER_TEMP/task-prompt.txt"
-          CODEX_API_KEY="$CODEX_API_KEY" codex exec --ephemeral --sandbox workspace-write --ask-for-approval never - < "$RUNNER_TEMP/task-prompt.txt"
+          CODEX_API_KEY="$CODEX_API_KEY" codex exec --ephemeral --sandbox workspace-write - < "$RUNNER_TEMP/task-prompt.txt"
 
       - name: Export proposed patch
         if: always()
