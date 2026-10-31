@@ -738,6 +738,72 @@ def test_download_text_attachment_rejects_redirect_to_external_host():
         download_text_attachment(Session(), "https://funpay.com/file/12345")
 
 
+
+def test_download_text_attachment_html_diagnostic_includes_safe_redirect_metadata():
+    import pytest
+    from funpay_orders import download_text_attachment
+
+    class Redirect:
+        status_code = 302
+
+    class Response:
+        url = "https://funpay.com/file/download"
+        status_code = 200
+        history = [Redirect()]
+        headers = {
+            "Content-Type": "text/html; charset=utf-8",
+            "Content-Length": "321",
+        }
+
+        def raise_for_status(self):
+            pass
+
+        def close(self):
+            pass
+
+    class Session:
+        def get(self, *args, **kwargs):
+            return Response()
+
+    with pytest.raises(ValueError) as error:
+        download_text_attachment(
+            Session(),
+            "https://funpay.com/file/12345?secret=DO_NOT_LOG",
+        )
+
+    message = str(error.value)
+    assert "HTTP=200" in message
+    assert "path=/file/download" in message
+    assert "redirects=302" in message
+    assert "content_type=text/html" in message
+    assert "secret" not in message
+    assert "DO_NOT_LOG" not in message
+
+
+def test_download_text_attachment_html_login_redirect_is_identified_without_body():
+    import pytest
+    from funpay_orders import download_text_attachment
+
+    class Response:
+        url = "https://funpay.com/account/login?return=/file/123"
+        status_code = 200
+        history = []
+        headers = {"Content-Type": "text/html"}
+
+        def raise_for_status(self):
+            pass
+
+        def close(self):
+            pass
+
+    class Session:
+        def get(self, *args, **kwargs):
+            return Response()
+
+    with pytest.raises(ValueError, match="login_path=yes"):
+        download_text_attachment(Session(), "https://funpay.com/file/12345")
+
+
 def test_download_text_attachment_rejects_html_login_response():
     import pytest
     from funpay_orders import download_text_attachment
