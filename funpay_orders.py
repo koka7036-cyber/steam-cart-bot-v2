@@ -607,9 +607,13 @@ def filter_reserved_assets(cache_data: dict, orders: dict | None = None,
 
     reserved_ids = set()
     for record in orders.values():
-        if not isinstance(record, dict) or record.get("status") == "cancelled":
+        if not isinstance(record, dict):
             continue
         reservation = record.get("reservation")
+        # A terminal status does not release stock while its reservation journal
+        # still exists. Keep the cache filter consistent with cold-start blockers.
+        if record.get("status") == "cancelled" and not reservation:
+            continue
         if isinstance(reservation, dict):
             reserved_ids.update(
                 str(asset_id) for asset_id in reservation.get("asset_ids", [])
