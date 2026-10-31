@@ -9,7 +9,8 @@ def issue(number=1, title="Add focused parser regression tests", body=None, labe
         "title": title,
         "body": body if body is not None else (
             "Implement a bounded regression test for the pure order parser helper. "
-            "Files to change:\\n- tests/test_order_parser.py."
+            "Files to change:\n"
+            "- tests/test_order_parser.py."
         ),
         "labels": labels if labels is not None else [{"name": "codex-ready"}],
         "state": state,
@@ -35,7 +36,8 @@ class DispatcherPolicyTests(unittest.TestCase):
         for path in ("start.bat", ".github/workflows/unsafe.yml", "../secrets/token.txt", "data/orders.json"):
             body = (
                 "Implement a bounded parser test with documentation.\\n"
-                f"Files to change:\\n- {path}"
+                "Files to change:\n"
+                f"- {path}"
             )
             self.assertFalse(validate_issue(issue(body=body)).eligible, path)
 
