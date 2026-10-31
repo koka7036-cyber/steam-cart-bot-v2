@@ -139,9 +139,9 @@ class PlayerokMonitor:
             logging.error("Playerok monitor stopped (%s)", type(exc).__name__)
 
     async def _sync_open_deals(self, account: Any) -> tuple[int, str | None]:
-        """Reconcile existing paid/pending seller deals without marketplace writes."""
+        """Reconcile recent seller deals across all statuses without marketplace writes."""
         try:
-            from PyPlayerokAPI.types.enums import ItemDealDirections, ItemDealStatuses
+            from PyPlayerokAPI.types.enums import ItemDealDirections
         except ImportError:
             return 0, "DealStatusTypesUnavailable"
 
@@ -155,7 +155,6 @@ class PlayerokMonitor:
             for page_index in range(max_pages):
                 page = await account.get_deals(
                     count=24,
-                    statuses=[ItemDealStatuses.PAID, ItemDealStatuses.PENDING],
                     direction=ItemDealDirections.OUT,
                     after_cursor=cursor,
                 )

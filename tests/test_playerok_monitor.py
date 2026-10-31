@@ -40,8 +40,9 @@ def test_monitor_awaits_async_listener_and_supports_private_router(monkeypatch):
                 return types.SimpleNamespace(username="seller-test", id="seller-id")
             return load_profile()
 
-        async def get_deals(self, *, count, statuses, direction, after_cursor):
+        async def get_deals(self, *, count, statuses=None, direction, after_cursor):
             assert count == 24
+            assert statuses is None
             assert after_cursor is None
             deal = types.SimpleNamespace(
                 id="open-deal-1",
@@ -71,7 +72,6 @@ def test_monitor_awaits_async_listener_and_supports_private_router(monkeypatch):
     types_package = types.ModuleType("PyPlayerokAPI.types")
     types_package.__path__ = []
     enums_module = types.ModuleType("PyPlayerokAPI.types.enums")
-    enums_module.ItemDealStatuses = types.SimpleNamespace(PAID="PAID", PENDING="PENDING")
     enums_module.ItemDealDirections = types.SimpleNamespace(OUT="OUT")
     monkeypatch.setitem(sys.modules, "PyPlayerokAPI", package)
     monkeypatch.setitem(sys.modules, "PyPlayerokAPI.account", account_module)
@@ -121,9 +121,9 @@ class FakePagedDealsAccount:
         self.page_info_values = list(page_info_values)
         self.calls = []
 
-    async def get_deals(self, *, count, statuses, direction, after_cursor):
+    async def get_deals(self, *, count, statuses=None, direction, after_cursor):
         assert count == 24
-        assert statuses == ["PAID", "PENDING"]
+        assert statuses is None
         assert direction == "OUT"
         self.calls.append(after_cursor)
         index = len(self.calls) - 1
