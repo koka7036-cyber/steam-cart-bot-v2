@@ -128,6 +128,11 @@ def test_status_normalization_handles_enums_and_unknown_values():
     assert normalize_platform_status("ROLLED_BACK") == "rolled_back"
     assert normalize_platform_status("random-new-status") == "unknown"
 
+def test_problem_resolved_status_triggers_admin_notification_without_claiming_delivery():
+    assert should_notify_admin_status_change({"platform_status": "problem_resolved"}) is True
+    assert should_notify_admin_status_change({"platform_status": "paid"}) is False
+    assert should_notify_admin_status_change({"platform_status": "unknown"}) is False
+
 
 def test_summary_counts_orders_without_revenue_estimates():
     orders = {}
@@ -291,8 +296,3 @@ def test_quantity_conflict_stays_in_manual_review_after_confirmed_event():
     assert active_orders_for_chat(orders, "chat-conflict-2") == []
 
 
-
-def test_problem_resolved_status_triggers_admin_notification_without_claiming_delivery():
-    assert should_notify_admin_status_change({"platform_status": "problem_resolved"}) is True
-    assert should_notify_admin_status_change({"platform_status": "paid"}) is False
-    assert should_notify_admin_status_change({"platform_status": "unknown"}) is False
