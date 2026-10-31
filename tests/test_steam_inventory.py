@@ -220,3 +220,47 @@ def test_collect_inventory_pages_rejects_assets_without_class_or_instance_id():
                 "more_items": 0,
             }
         )
+
+def test_collect_inventory_pages_rejects_conflicting_duplicate_descriptions():
+    pages = [
+        {
+            "success": 1,
+            "assets": [asset(1)],
+            "descriptions": [description("Card A")],
+            "more_items": 1,
+            "last_assetid": "1",
+        },
+        {
+            "success": 1,
+            "assets": [asset(2)],
+            "descriptions": [description("Card B")],
+            "more_items": 0,
+        },
+    ]
+
+    with pytest.raises(SteamInventoryPaginationError, match="разные описания"):
+        collect_inventory_pages(lambda cursor: pages.pop(0))
+
+
+def test_collect_inventory_pages_accepts_identical_duplicate_descriptions():
+    pages = [
+        {
+            "success": 1,
+            "assets": [asset(1)],
+            "descriptions": [description("Card A")],
+            "more_items": 1,
+            "last_assetid": "1",
+        },
+        {
+            "success": 1,
+            "assets": [asset(2)],
+            "descriptions": [description("Card A")],
+            "more_items": 0,
+        },
+    ]
+
+    assets, descriptions = collect_inventory_pages(lambda cursor: pages.pop(0))
+
+    assert [item["assetid"] for item in assets] == ["1", "2"]
+    assert descriptions["100_0"]["market_hash_name"] == "Card A"
+
