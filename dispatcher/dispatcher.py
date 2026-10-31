@@ -13,7 +13,7 @@ from typing import Any, Iterable, Mapping
 ELIGIBLE_LABELS = frozenset({"codex-ready"})
 BLOCKED_LABELS = frozenset({"do-not-automate", "needs-human", "blocked"})
 PROTECTED_PATHS = (
-    ".github/workflows/",
+    ".github/",
     ".env",
     "secrets",
     "runtime",
@@ -24,7 +24,7 @@ PROTECTED_PATHS = (
     "funpay",
     "playerok",
     "start.bat",
-    "run_bot.ps1",
+    "run_bot.ps1",\n    "configure_playerok.ps1",\n    "repair_updater.bat",
     "update_bot.ps1",
     "install_autostart.ps1",
     "toggle_autostart_task.ps1",
