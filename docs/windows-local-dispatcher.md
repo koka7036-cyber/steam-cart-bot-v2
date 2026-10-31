@@ -2,7 +2,7 @@
 
 ## Decision
 
-Use the Windows PC as the durable execution host and keep dispatcher state in a local SQLite database. Do **not** register this personal PC as a GitHub-hosted repository runner.
+Use the Windows PC as the durable execution host and keep dispatcher state in a local SQLite database. Do **not** register this personal PC as a GitHub repository runner.
 
 The worker is a separate local process started by an explicit Windows Scheduled Task after the machine is prepared. GitHub Actions remains a hosted, read-only preflight. This avoids giving arbitrary pull-request workflows execution access to the user's PC.
 
@@ -11,7 +11,7 @@ The worker is a separate local process started by an explicit Windows Scheduled 
 Default production path:
 
 ```text
-C:\\CardBot\\dispatcher-state\\dispatcher.sqlite3
+C:\CardBot\dispatcher-state\dispatcher.sqlite3
 ```
 
 Requirements:
@@ -44,7 +44,7 @@ Requirements:
 ## Windows prerequisites
 
 Before enabling a scheduled task, an operator must verify on the target PC:
-- Windows 11 and a local NTFS path at `C:\\CardBot`.
+- Windows 11 and a local NTFS path at `C:\CardBot`.
 - Python version compatible with the repository.
 - Git is installed and the repository clone is clean.
 - Codex CLI is installed and authenticated for the intended account.
