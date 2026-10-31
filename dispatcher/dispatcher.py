@@ -99,6 +99,8 @@ def validate_issue(issue: Mapping[str, Any]) -> QueueDecision:
     # The issue body may mention excluded operations as explicit constraints.
     # Reject only affirmative requests to perform them, not safety statements
     # such as "no external API calls" or "do not touch inventory".
+    if "steam post" in lowered and re.search(r"\b(live|real)\s+sales?\b", lowered):
+        return QueueDecision(number, title, False, "issue requests a live sale operation")
     prohibited_requests = (
         r"\\b(?:perform|execute|enable|implement|add)\\b[^.\\n]{0,100}\\blive\\s+sale\\b",
         r"\\b(?:perform|execute|enable|implement|add)\\b[^.\\n]{0,100}\\blive\\s+sale\\b",
