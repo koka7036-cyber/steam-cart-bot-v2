@@ -452,39 +452,91 @@ def extract_paid_order_events(html_document: str) -> list[tuple[str, str]]:
 
 def filter_reserved_assets(cache_data: dict, orders: dict | None = None,
                           vouchers: dict | None = None) -> dict:
-    """Return a stock cache with assets belonging to pending/uncertain offers removed."""
+    """Filter reserved assets, quarantining all stock when ownership is ambiguous."""
     if not isinstance(cache_data, dict):
         return {}
-    orders = orders if isinstance(orders, dict) else {}
-    vouchers = vouchers if isinstance(vouchers, dict) else {}
+
+    malformed_reservation = False
+    if orders is None:
+        orders = {}
+    elif not isinstance(orders, dict):
+        malformed_reservation = True
+        orders = {}
+    if vouchers is None:
+        vouchers = {}
+    elif not isinstance(vouchers, dict):
+        malformed_reservation = True
+        vouchers = {}
 
     reserved_ids = set()
+
+    def register_reservation_assets(asset_ids):
+        nonlocal malformed_reservation
+        # One Steam asset can belong to one active order/voucher only.
+        if any(asset_id in reserved_ids for asset_id in asset_ids):
+            malformed_reservation = True
+        reserved_ids.update(asset_ids)
+
+    def collect_asset_ids(raw_ids):
+        if not isinstance(raw_ids, list) or not raw_ids:
+            return None
+        normalized = []
+        for asset_id in raw_ids:
+            value = str(asset_id)
+            if not value.isdigit() or value in normalized:
+                return None
+            normalized.append(value)
+        return normalized
+
     for record in orders.values():
         if not isinstance(record, dict):
+            malformed_reservation = True
             continue
         reservation = record.get("reservation")
-        # A cancelled status is safe only after its reservation has been cleared.
-        # If a journal still carries reservation data, fail closed and keep those
-        # asset IDs unavailable until the record is reconciled.
-        if record.get("status") == "cancelled" and not reservation:
+        # A clean cancelled order is terminal only when reservation is explicitly
+        # cleared. Empty or malformed reservation objects must fail closed.
+        if record.get("status") == "cancelled" and reservation is None:
             continue
-        if isinstance(reservation, dict):
-            reserved_ids.update(
-                str(asset_id) for asset_id in reservation.get("asset_ids", [])
-                if str(asset_id)
-            )
+        if reservation is None:
+            continue
+        if not isinstance(reservation, dict):
+            malformed_reservation = True
+            continue
+        asset_ids = collect_asset_ids(reservation.get("asset_ids"))
+        if asset_ids is None:
+            malformed_reservation = True
+            continue
+        register_reservation_assets(asset_ids)
 
     reserved_voucher_states = {"sending", "uncertain", "sent", "created_unconfirmed"}
     for voucher in vouchers.values():
         if not isinstance(voucher, dict):
+            malformed_reservation = True
             continue
-        if voucher.get("delivery_state") in reserved_voucher_states or (
+        has_reserved_delivery = voucher.get("delivery_state") in reserved_voucher_states or (
             voucher.get("used") and voucher.get("trade_offer_id")
-        ):
-            reserved_ids.update(
-                str(asset_id) for asset_id in voucher.get("reserved_asset_ids", [])
-                if str(asset_id)
-            )
+        )
+        if has_reserved_delivery:
+            asset_ids = collect_asset_ids(voucher.get("reserved_asset_ids"))
+            if asset_ids is None:
+                malformed_reservation = True
+                continue
+            register_reservation_assets(asset_ids)
+
+    if malformed_reservation:
+        # A damaged reservation makes exact asset ownership unknowable.
+        # Quarantine the full stock view rather than risk a duplicate offer.
+        quarantined = dict(cache_data)
+        games = cache_data.get("games", {})
+        quarantined_games = {}
+        if isinstance(games, dict):
+            for game_name, cards in games.items():
+                if not isinstance(cards, dict):
+                    continue
+                quarantined_games[game_name] = {card_name: [] for card_name in cards}
+        quarantined["games"] = quarantined_games
+        quarantined["total_cards"] = 0
+        return quarantined
 
     filtered = dict(cache_data)
     filtered_games = {}
@@ -507,7 +559,6 @@ def filter_reserved_assets(cache_data: dict, orders: dict | None = None,
         len(asset_ids) for cards in filtered_games.values() for asset_ids in cards.values()
     )
     return filtered
-
 
 def voucher_redemption_block_reason(voucher: dict) -> str | None:
     """Reject another redemption if a prior Steam offer may already exist."""
