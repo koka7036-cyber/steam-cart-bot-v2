@@ -112,10 +112,6 @@ STEAM_TRADE_URL_RE = re.compile(
     r"https?://steamcommunity\.com/tradeoffer/new/\?[^\s<>\"'\\]+",
     re.IGNORECASE,
 )
-_ALLOWED_TEXT_EXTENSIONS = {".txt", ".text", ".csv", ".log"}
-_MAX_TEXT_ATTACHMENT_BYTES = 64 * 1024
-
-
 def extract_steam_trade_url(text: str) -> str | None:
     """Extract exactly one valid Steam Trade URL; reject off-host or ambiguous input."""
     candidates = STEAM_TRADE_URL_RE.findall(html.unescape(text or ""))
@@ -134,58 +130,6 @@ def extract_steam_trade_url(text: str) -> str | None:
             normalized.append(candidate)
     unique = list(dict.fromkeys(normalized))
     return unique[0] if len(unique) == 1 else None
-
-
-def _is_text_filename(value: str) -> bool:
-    if not value:
-        return False
-    path = urlparse(value).path
-    return any(path.lower().endswith(ext) for ext in _ALLOWED_TEXT_EXTENSIONS)
-
-
-def _is_trusted_funpay_url(value: str) -> bool:
-    parsed = urlparse(value)
-    host = (parsed.hostname or "").lower()
-    return parsed.scheme == "https" and (host == "funpay.com" or host.endswith(".funpay.com"))
-
-
-class _AttachmentLinkParser(HTMLParser):
-    """Collect only download links that look like in-chat file attachments."""
-
-    _VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
-
-    def __init__(self):
-        super().__init__(convert_charrefs=True)
-        self._stack = []
-        self.links = []
-
-    def handle_starttag(self, tag, attrs):
-        attrs = {key.lower(): (value or "") for key, value in attrs}
-        class_tokens = (attrs.get("class", "") + " " + attrs.get("data-type", "")).lower()
-        label = " ".join(attrs.get(key, "") for key in ("title", "aria-label", "data-name", "data-filename", "download"))
-        href = attrs.get("href", "")
-        inherited_context = any(item[1] for item in self._stack)
-        own_context = bool(re.search(r"(?:attachment|chat-msg-file|file-upload|file-attachment|chat-msg-item)", class_tokens))
-        filename_hint = _is_text_filename(label) or _is_text_filename(href)
-        is_file_link = tag.lower() == "a" and bool(href) and (
-            inherited_context or own_context or filename_hint or "download" in attrs
-        )
-        if is_file_link:
-            self.links.append((href, label or href))
-        if tag.lower() not in self._VOID_TAGS:
-            self._stack.append((tag.lower(), inherited_context or own_context))
-
-    def handle_startendtag(self, tag, attrs):
-        self.handle_starttag(tag, attrs)
-        if tag.lower() not in self._VOID_TAGS:
-            self.handle_endtag(tag)
-
-    def handle_endtag(self, tag):
-        tag = tag.lower()
-        for index in range(len(self._stack) - 1, -1, -1):
-            if self._stack[index][0] == tag:
-                del self._stack[index:]
-                return
 
 
 class _FunPaySystemAlertParser(HTMLParser):
@@ -460,94 +404,6 @@ def compact_funpay_text(value: str, max_chars: int | None = None) -> str:
         suffix = "… [сообщение сокращено]"
         text = text[:max(0, max_chars - len(suffix))].rstrip() + suffix
     return text
-
-
-def _safe_attachment_response_diagnostic(response) -> str:
-    """Describe an unexpected HTML response without exposing query strings or body."""
-    status = getattr(response, "status_code", None)
-    final_url = getattr(response, "url", "") or ""
-    parsed = urlparse(final_url)
-    safe_path = parsed.path[:120] or "/"
-    history = getattr(response, "history", ()) or ()
-    redirect_codes = ",".join(
-        str(getattr(item, "status_code", "?")) for item in history[:5]
-    ) or "none"
-    headers = getattr(response, "headers", {}) or {}
-    content_type = str(headers.get("Content-Type", "")).split(";", 1)[0].strip().lower()
-    login_path = bool(re.search(r"(?:login|auth|signin|account)", safe_path, re.IGNORECASE))
-    return (
-        f"HTTP={status if status is not None else 'unknown'}; "
-        f"path={safe_path}; redirects={redirect_codes}; "
-        f"content_type={content_type or 'unknown'}; login_path={'yes' if login_path else 'no'}"
-    )
-
-
-def download_text_attachment(
-    session,
-    attachment_url: str,
-    max_bytes: int = _MAX_TEXT_ATTACHMENT_BYTES,
-    *,
-    referer_url: str | None = None,
-) -> str:
-    """Download one small, trusted FunPay text attachment and decode it safely.
-
-    Redirects outside FunPay, HTML/login pages, oversized files and binary data
-    are rejected before a trade URL can be extracted from the content.
-    """
-    if not _is_trusted_funpay_url(attachment_url):
-        raise ValueError("Ссылка на вложение находится вне домена FunPay.")
-
-    request_headers = {}
-    if referer_url is not None:
-        if not _is_trusted_funpay_url(referer_url):
-            raise ValueError("Referer вложения находится вне домена FunPay.")
-        request_headers["Referer"] = referer_url
-    request_headers["Accept"] = "text/plain, text/*;q=0.9, */*;q=0.1"
-
-    response = session.get(
-        attachment_url,
-        timeout=10,
-        stream=True,
-        headers=request_headers,
-    )
-    try:
-        response.raise_for_status()
-        final_url = getattr(response, "url", attachment_url) or attachment_url
-        if not _is_trusted_funpay_url(final_url):
-            raise ValueError("FunPay перенаправил скачивание на недоверенный домен.")
-
-        headers = getattr(response, "headers", {}) or {}
-        content_type = str(headers.get("Content-Type", "")).lower()
-        if "text/html" in content_type:
-            diagnostic = _safe_attachment_response_diagnostic(response)
-            raise ValueError(
-                "FunPay вернул HTML вместо текстового файла. "
-                f"Диагностика: {diagnostic}"
-            )
-
-        content_length = str(headers.get("Content-Length", "")).strip()
-        if content_length.isdigit() and int(content_length) > max_bytes:
-            raise ValueError(f"Текстовый файл превышает лимит {max_bytes} байт.")
-
-        payload = bytearray()
-        iterator = getattr(response, "iter_content", None)
-        if callable(iterator):
-            chunks = iterator(chunk_size=8192)
-        else:
-            chunks = (getattr(response, "content", b""),)
-
-        for chunk in chunks:
-            if not chunk:
-                continue
-            payload.extend(chunk)
-            if len(payload) > max_bytes:
-                raise ValueError(f"Текстовый файл превышает лимит {max_bytes} байт.")
-
-        return decode_text_attachment(bytes(payload), max_bytes=max_bytes)
-    finally:
-        close = getattr(response, "close", None)
-        if callable(close):
-            close()
 
 
 def extract_last_chat_message_fragment(html_document: str) -> str | None:
