@@ -53,3 +53,12 @@ def test_cancelled_order_without_reservation_releases_no_additional_assets():
     filtered = filter_reserved_assets(cache, orders=orders)
 
     assert filtered["games"]["Game"]["Card"] == ["asset-1", "asset-2"]
+
+
+def test_cancelled_order_with_reservation_blocks_cold_start():
+    assert funpay_cold_start_blockers({
+        "cancelled_with_legacy_reservation": {
+            "status": "cancelled",
+            "reservation": {"asset_ids": ["asset-1"]},
+        }
+    }) == [("cancelled_with_legacy_reservation", "cancelled")]
