@@ -178,3 +178,35 @@ def test_funpay_admin_commands_catch_ledger_integrity_without_skipping_normal_pa
     release = ast.get_source_segment(source, functions["funpay_release_cmd"])
     assert "funpay_release_refund_block_reason(record)" in release
     assert 'record["status"] = "cancelled"' in release
+
+
+def test_fpcoldstart_holds_order_lock_across_check_backup_and_clear():
+    import ast
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "bot.py").read_text(encoding="utf-8-sig")
+    tree = ast.parse(source)
+    function = next(
+        node for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "funpay_cold_start_cmd"
+    )
+    locked_blocks = [
+        node for node in ast.walk(function)
+        if isinstance(node, (ast.With, ast.AsyncWith))
+        and any(
+            isinstance(item.context_expr, ast.Name)
+            and item.context_expr.id == "funpay_orders_lock"
+            for item in node.items
+        )
+    ]
+    assert len(locked_blocks) == 1
+    locked = locked_blocks[0]
+    calls = {
+        node.func.id if isinstance(node.func, ast.Name)
+        else node.func.attr if isinstance(node.func, ast.Attribute)
+        else None
+        for node in ast.walk(locked)
+        if isinstance(node, ast.Call)
+    }
+    assert {"load_funpay_orders", "funpay_cold_start_blockers", "copy2", "save_json"} <= calls
+    assert "send_message" not in calls
