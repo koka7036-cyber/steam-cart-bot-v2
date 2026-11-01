@@ -440,60 +440,6 @@ def extract_paid_order_events(html_document: str) -> list[tuple[str, str]]:
             events.append((fragment, text))
     return events
 
-def extract_text_attachment_href(html_fragment: str, base_url: str) -> str | None:
-    """Return one trusted FunPay-hosted text attachment URL from message HTML.
-
-    A single matching attachment is required. External hosts, unrelated links,
-    and ambiguous multiple attachments are rejected.
-    """
-    parser = _AttachmentLinkParser()
-    try:
-        parser.feed(html_fragment or "")
-        parser.close()
-    except Exception:
-        return None
-    candidates = []
-    for href, _label in parser.links:
-        resolved = urljoin(base_url, html.unescape(href.strip()))
-        if _is_trusted_funpay_url(resolved):
-            candidates.append(resolved)
-    unique = list(dict.fromkeys(candidates))
-    return unique[0] if len(unique) == 1 else None
-
-
-def decode_text_attachment(data: bytes, max_bytes: int = _MAX_TEXT_ATTACHMENT_BYTES) -> str:
-    """Decode a small plain-text attachment; reject oversized or binary files."""
-    if not isinstance(data, (bytes, bytearray)):
-        raise ValueError("Вложение не является двоичными данными.")
-    if not data:
-        raise ValueError("Текстовый файл пуст.")
-    if len(data) > max_bytes:
-        raise ValueError(f"Текстовый файл превышает лимит {max_bytes} байт.")
-    payload = bytes(data)
-    # UTF-16 must be detected by its BOM; otherwise CP1251's single-byte decoder
-    # can parse UTF-16/incorrect binary bytes into plausible-looking gibberish.
-    if payload.startswith((b"\xff\xfe", b"\xfe\xff")):
-        encodings = ("utf-16",)
-    else:
-        # Do not guess UTF-16 without a BOM; arbitrary binary bytes can decode as gibberish.
-        encodings = ("utf-8-sig", "cp1251")
-    last_error = None
-    for encoding in encodings:
-        try:
-            text = payload.decode(encoding)
-        except UnicodeDecodeError as exc:
-            last_error = exc
-            continue
-        if "\x00" in text:
-            continue
-        bad_controls = sum(1 for char in text if ord(char) < 32 and char not in "\r\n\t")
-        if bad_controls:
-            continue
-        if text.strip():
-            return text
-    raise ValueError("Не удалось прочитать файл как обычный текст UTF-8/UTF-16/Windows-1251.") from last_error
-
-
 def filter_reserved_assets(cache_data: dict, orders: dict | None = None,
                           vouchers: dict | None = None) -> dict:
     """Return a stock cache with assets belonging to pending/uncertain offers removed."""
@@ -803,7 +749,7 @@ def summarize_funpay_chat_diagnostics(timeline: dict, orders: dict, node_id: str
     input_summary = {
         "message_id": None,
         "has_trade_url": False,
-        "has_text_attachment": False,
+        "has_text_attachment_removed": False,
     }
     if isinstance(latest_buyer, dict):
         fragment = str(latest_buyer.get("html") or "")
@@ -814,7 +760,6 @@ def summarize_funpay_chat_diagnostics(timeline: dict, orders: dict, node_id: str
                 extract_steam_trade_url(text) or extract_steam_trade_url(fragment)
             ),
             "has_text_attachment": bool(
-                extract_text_attachment_href(
                     fragment,
                     f"https://funpay.com/chat/?node={node_id}",
                 )
