@@ -1,5 +1,5 @@
 """Regression tests for safe FunPay order matching."""
-from funpay_orders import (decode_text_attachment, download_text_attachment, extract_chat_message_fragments, extract_last_chat_message_fragment, extract_last_customer_message_fragment, extract_steam_trade_url, extract_text_attachment_href, filter_reserved_assets, find_open_order_for_chat, funpay_cold_start_blockers, funpay_input_signature, inventory_cache_freshness_error, is_funpay_system_message, mark_input_received, register_payment, voucher_redemption_block_reason, voucher_reset_block_reason)
+from funpay_orders import (extract_chat_message_fragments, extract_last_chat_message_fragment, extract_last_customer_message_fragment, extract_steam_trade_url, filter_reserved_assets, find_open_order_for_chat, funpay_cold_start_blockers, funpay_input_signature, has_unsupported_funpay_attachment, FunPayLedgerIntegrityError, load_funpay_order_ledger, inventory_cache_freshness_error, is_funpay_system_message, mark_input_received, register_payment, voucher_redemption_block_reason, voucher_reset_block_reason)
 from order_parser import detect_order_sets_and_quantity, is_funpay_refund_notification, is_paid_order_notification
 
 
@@ -12,6 +12,38 @@ def make_order(key, node_id="123", status="awaiting_input", updated_at=1):
         "input_kind": None,
         "input_received_at": None,
     }
+
+
+def test_funpay_image_attachment_is_detected_as_unsupported_input():
+    assert has_unsupported_funpay_attachment('<img src="/file/12345" alt="image">') is True
+
+
+def test_funpay_file_attachment_is_detected_as_unsupported_input():
+    assert has_unsupported_funpay_attachment('<div class="chat-msg-file">image.png</div>') is True
+
+
+def test_funpay_plain_text_message_is_not_marked_as_attachment():
+    assert has_unsupported_funpay_attachment('<div class="chat-message">Trade URL</div>') is False
+
+
+def test_extract_steam_trade_url_accepts_plain_text_message():
+    url = "https://steamcommunity.com/tradeoffer/new/?partner=123456&token=AbCdEf12"
+    assert extract_steam_trade_url("Моя Steam Trade URL: " + url) == url
+
+
+def test_extract_steam_trade_url_rejects_profile_link():
+    assert extract_steam_trade_url("https://steamcommunity.com/profiles/123456") is None
+
+
+def test_extract_steam_trade_url_rejects_missing_partner_or_token():
+    assert extract_steam_trade_url("https://steamcommunity.com/tradeoffer/new/?partner=123456") is None
+    assert extract_steam_trade_url("https://steamcommunity.com/tradeoffer/new/?token=AbCdEf12") is None
+
+
+def test_extract_steam_trade_url_rejects_ambiguous_multiple_urls():
+    first = "https://steamcommunity.com/tradeoffer/new/?partner=123456&token=AbCdEf12"
+    second = "https://steamcommunity.com/tradeoffer/new/?partner=654321&token=ZyXwVu98"
+    assert extract_steam_trade_url(first + " " + second) is None
 
 
 def test_no_open_order_returns_none():
@@ -136,56 +168,6 @@ def test_extract_steam_trade_url_rejects_ambiguous_multiple_links():
     assert extract_steam_trade_url(a + "\n" + b) is None
 
 
-def test_extract_text_attachment_href_from_funpay_chat_file():
-    fragment = (
-        '<div class="chat-msg-file">'
-        '<a href="/file/12345" title="trade-url.txt">trade-url.txt</a>'
-        '</div>'
-    )
-    assert extract_text_attachment_href(
-        fragment, "https://funpay.com/chat/?node=987"
-    ) == "https://funpay.com/file/12345"
-
-
-def test_extract_text_attachment_href_rejects_external_hosts():
-    fragment = '<div class="chat-msg-file"><a href="https://example.com/trade.txt">trade.txt</a></div>'
-    assert extract_text_attachment_href(
-        fragment, "https://funpay.com/chat/?node=987"
-    ) is None
-
-
-def test_extract_text_attachment_href_requires_unambiguous_attachment():
-    fragment = (
-        '<div class="chat-msg-file"><a href="/file/1">one.txt</a></div>'
-        '<div class="chat-msg-file"><a href="/file/2">two.txt</a></div>'
-    )
-    assert extract_text_attachment_href(
-        fragment, "https://funpay.com/chat/?node=987"
-    ) is None
-
-
-def test_decode_text_attachment_utf8_and_windows1251():
-    url = "https://steamcommunity.com/tradeoffer/new/?partner=123456&token=AbCdEf12"
-    assert extract_steam_trade_url(
-        decode_text_attachment(("Ссылка: " + url).encode("utf-8"))
-    ) == url
-    assert extract_steam_trade_url(
-        decode_text_attachment(("Ссылка: " + url).encode("cp1251"))
-    ) == url
-
-
-def test_decode_text_attachment_rejects_binary_data():
-    import pytest
-    with pytest.raises(ValueError):
-        decode_text_attachment(bytes([0, 1, 2, 3]))
-
-
-def test_decode_text_attachment_enforces_size_limit():
-    import pytest
-    with pytest.raises(ValueError):
-        decode_text_attachment(b"A" * (64 * 1024 + 1))
-
-
 def test_retry_required_order_is_open_for_corrected_input():
     order = make_order("retry", status="retry_required")
     assert find_open_order_for_chat({"retry": order}, "123") is order
@@ -203,10 +185,6 @@ def test_extract_last_chat_message_fragment_does_not_reuse_old_trade_link_for_la
     assert fragment is not None
     assert "token=OLD" not in fragment
     assert "trade-url.txt" in fragment
-    assert extract_text_attachment_href(
-        fragment, "https://funpay.com/chat/?node=987"
-    ) == "https://funpay.com/file/765"
-
 
 def test_extract_last_chat_message_fragment_returns_latest_text():
     html_doc = (
@@ -297,17 +275,6 @@ def test_filter_reserved_assets_excludes_uncertain_voucher_assets():
     }
     filtered = filter_reserved_assets(cache, {}, vouchers)
     assert filtered["games"]["Game"]["Card"] == ["1", "3"]
-
-
-def test_extract_attachment_link_inside_funpay_message_wrapper():
-    fragment = (
-        '<div class="chat-msg-item">'
-        '<div class="chat-message"><a href="/file/download/987">trade-url.txt</a></div>'
-        '</div>'
-    )
-    assert extract_text_attachment_href(
-        fragment, "https://funpay.com/chat/?node=987"
-    ) == "https://funpay.com/file/download/987"
 
 
 def test_order_creation_notification_is_not_treated_as_paid():
@@ -687,79 +654,6 @@ def test_system_refund_only_chat_has_no_customer_message():
 
 
 
-def test_download_text_attachment_accepts_funpay_text_and_preserves_trade_url():
-    from funpay_orders import download_text_attachment
-
-    url = "https://steamcommunity.com/tradeoffer/new/?partner=123456&token=AbCdEf12"
-
-    class Response:
-        url = "https://funpay.com/file/12345"
-        headers = {"Content-Type": "text/plain; charset=utf-8", "Content-Length": "100"}
-
-        def raise_for_status(self):
-            pass
-
-        def iter_content(self, chunk_size):
-            assert chunk_size == 8192
-            yield ("Trade URL: " + url).encode("utf-8")
-
-        def close(self):
-            self.closed = True
-
-    class Session:
-        def get(self, request_url, timeout, stream):
-            assert request_url == "https://funpay.com/file/12345"
-            assert timeout == 10 and stream is True
-            return Response()
-
-    text = download_text_attachment(Session(), "https://funpay.com/file/12345")
-    assert extract_steam_trade_url(text) == url
-
-
-def test_download_text_attachment_rejects_redirect_to_external_host():
-    import pytest
-    from funpay_orders import download_text_attachment
-
-    class Response:
-        url = "https://example.com/steal.txt"
-        headers = {"Content-Type": "text/plain"}
-
-        def raise_for_status(self):
-            pass
-
-        def close(self):
-            pass
-
-    class Session:
-        def get(self, *args, **kwargs):
-            return Response()
-
-    with pytest.raises(ValueError, match="недоверенный"):
-        download_text_attachment(Session(), "https://funpay.com/file/12345")
-
-
-def test_download_text_attachment_rejects_html_login_response():
-    import pytest
-    from funpay_orders import download_text_attachment
-
-    class Response:
-        url = "https://funpay.com/file/12345"
-        headers = {"Content-Type": "text/html"}
-
-        def raise_for_status(self):
-            pass
-
-        def close(self):
-            pass
-
-    class Session:
-        def get(self, *args, **kwargs):
-            return Response()
-
-    with pytest.raises(ValueError, match="HTML"):
-        download_text_attachment(Session(), "https://funpay.com/file/12345")
-
-
 def test_cold_start_treats_refunded_order_without_reservation_as_terminal():
     assert funpay_cold_start_blockers({
         "refunded": {"status": "refunded", "reservation": None}
@@ -1094,4 +988,188 @@ def test_funpay_diagnostic_does_not_reuse_old_buyer_url_after_latest_refund():
     assert result["latest_buyer_input"]["message_id"] is None
     assert result["latest_buyer_input"]["has_trade_url"] is False
     assert "OLD_SECRET" not in repr(result)
+
+
+
+
+
+
+def test_filter_reserved_assets_quarantines_all_stock_for_malformed_order_reservation():
+    cache = {"total_cards": 2, "games": {"Game": {"Card A": ["12345", "23456"], "Card B": ["34567"]}}}
+    orders = {"damaged": {"status": "reserved", "reservation": {"asset_ids": "12345"}}}
+    filtered = filter_reserved_assets(cache, orders, {})
+    assert filtered["games"] == {"Game": {"Card A": [], "Card B": []}}
+    assert filtered["total_cards"] == 0
+    assert cache["games"]["Game"]["Card A"] == ["12345", "23456"]
+
+
+def test_filter_reserved_assets_quarantines_all_stock_for_malformed_voucher_reservation():
+    cache = {"games": {"Game": {"Card": ["12345", "23456"]}}}
+    vouchers = {"code": {"delivery_state": "uncertain", "reserved_asset_ids": "12345"}}
+    filtered = filter_reserved_assets(cache, {}, vouchers)
+    assert filtered["games"] == {"Game": {"Card": []}}
+    assert filtered["total_cards"] == 0
+
+
+def test_filter_reserved_assets_quarantines_duplicate_assets_across_orders():
+    cache = {"total_cards": 2, "games": {"Game": {"Card": ["12345", "23456"]}}}
+    orders = {
+        "order-a": {"status": "reserved", "reservation": {"asset_ids": ["12345"]}},
+        "order-b": {"status": "delivery_uncertain", "reservation": {"asset_ids": ["12345"]}},
+    }
+    filtered = filter_reserved_assets(cache, orders, {})
+    assert filtered["games"] == {"Game": {"Card": []}}
+    assert filtered["total_cards"] == 0
+    assert cache["games"]["Game"]["Card"] == ["12345", "23456"]
+
+
+def test_filter_reserved_assets_quarantines_order_voucher_asset_collision():
+    cache = {"total_cards": 2, "games": {"Game": {"Card": ["12345", "23456"]}}}
+    orders = {"order-a": {"status": "reserved", "reservation": {"asset_ids": ["12345"]}}}
+    vouchers = {"voucher": {"delivery_state": "uncertain", "reserved_asset_ids": ["12345"]}}
+    filtered = filter_reserved_assets(cache, orders, vouchers)
+    assert filtered["games"] == {"Game": {"Card": []}}
+    assert filtered["total_cards"] == 0
+
+
+def test_filter_reserved_assets_quarantines_invalid_reservation_container_or_record():
+    cache = {"games": {"Game": {"Card": ["12345", "23456"]}}}
+    cases = [
+        (["invalid-order-map"], {}),
+        ({"bad": "not-a-record"}, {}),
+        ({"bad": {"status": "reserved", "reservation": []}}, {}),
+        ({"missing-reservation": {"status": "cancelled"}}, {}),
+        ({}, ["invalid-voucher-map"]),
+        ({}, {"bad": None}),
+        ({}, {"bad": {"delivery_state": "uncertain", "reserved_asset_ids": []}}),
+    ]
+    for orders, vouchers in cases:
+        filtered = filter_reserved_assets(cache, orders, vouchers)
+        assert filtered["games"] == {"Game": {"Card": []}}
+        assert filtered["total_cards"] == 0
+
+
+def test_filter_reserved_assets_quarantines_delivery_states_without_reservation():
+    cache = {"games": {"Game": {"Card": ["12345", "23456"]}}}
+    for status in ("reserved", "sending", "delivery_uncertain", "offer_sent", "offer_pending_confirmation", "refund_review"):
+        orders = {"order": {"status": status, "reservation": None}}
+        filtered = filter_reserved_assets(cache, orders, {})
+        assert filtered["games"] == {"Game": {"Card": []}}, status
+        assert filtered["total_cards"] == 0
+
+
+def test_filter_reserved_assets_quarantines_missing_reservation_and_active_status_without_reservation():
+    cache = {"games": {"Game": {"Card": ["12345", "23456"]}}}
+    cases = [
+        {"cancelled_without_reservation": {"status": "cancelled"}},
+        {"reserved_without_reservation": {"status": "reserved", "reservation": None}},
+        {"sending_without_reservation": {"status": "sending", "reservation": None}},
+        {"uncertain_without_reservation": {"status": "delivery_uncertain", "reservation": None}},
+    ]
+    for orders in cases:
+        filtered = filter_reserved_assets(cache, orders, {})
+        assert filtered["games"] == {"Game": {"Card": []}}, orders
+        assert filtered["total_cards"] == 0
+
+
+def test_filter_reserved_assets_quarantines_duplicate_asset_ids_inside_one_reservation():
+    cache = {"games": {"Game": {"Card": ["12345", "23456"]}}}
+    orders = {"bad": {"status": "reserved", "reservation": {"asset_ids": ["12345", "12345"]}}}
+    filtered = filter_reserved_assets(cache, orders, {})
+    assert filtered["games"] == {"Game": {"Card": []}}
+    assert filtered["total_cards"] == 0
+
+
+def test_filter_reserved_assets_hides_reservation_on_cancelled_order_but_not_clean_cancelled_order():
+    cache = {"games": {"Game": {"Card": ["12345", "23456"]}}}
+    orders = {
+        "cancelled-with-reservation": {
+            "status": "cancelled",
+            "reservation": {"asset_ids": ["12345"]},
+        },
+        "cancelled-clean": {"status": "cancelled", "reservation": None},
+    }
+    filtered = filter_reserved_assets(cache, orders, {})
+    assert filtered["games"]["Game"]["Card"] == ["23456"]
+    assert filtered["total_cards"] == 1
+
+
+
+def test_load_funpay_order_ledger_initializes_only_when_file_is_missing(tmp_path):
+    path = tmp_path / "funpay_orders.json"
+    assert load_funpay_order_ledger(path) == {"orders": {}}
+
+
+def test_load_funpay_order_ledger_reads_valid_orders_and_refunds(tmp_path):
+    path = tmp_path / "funpay_orders.json"
+    expected = {
+        "orders": {"fp-order-1234": {"status": "reserved"}},
+        "refunds": {},
+    }
+    path.write_text(__import__("json").dumps(expected), encoding="utf-8")
+    assert load_funpay_order_ledger(path) == expected
+
+
+def test_load_funpay_order_ledger_rejects_corrupt_existing_json(tmp_path):
+    path = tmp_path / "funpay_orders.json"
+    path.write_text('{"orders": ', encoding="utf-8")
+    try:
+        load_funpay_order_ledger(path)
+    except FunPayLedgerIntegrityError:
+        pass
+    else:
+        raise AssertionError("corrupt order ledger must never become an empty ledger")
+
+
+def test_load_funpay_order_ledger_rejects_invalid_root_or_orders_container(tmp_path):
+    path = tmp_path / "funpay_orders.json"
+    for payload in ('[]', '{}', '{"orders": []}', '{"orders": {}, "refunds": []}'):
+        path.write_text(payload, encoding="utf-8")
+        try:
+            load_funpay_order_ledger(path)
+        except FunPayLedgerIntegrityError:
+            continue
+        raise AssertionError(f"invalid ledger structure was accepted: {payload}")
+
+
+
+def test_load_funpay_order_ledger_rejects_directory_at_ledger_path(tmp_path):
+    path = tmp_path / "funpay_orders.json"
+    path.mkdir()
+    try:
+        load_funpay_order_ledger(path)
+    except FunPayLedgerIntegrityError:
+        pass
+    else:
+        raise AssertionError("a directory must not be treated as a missing ledger")
+
+
+def test_restore_reserved_assets_quarantines_conflicting_asset_location():
+    from funpay_orders import restore_reserved_assets
+
+    cache = {"games": {"Game": {"Card A": ["10", "11"], "Card B": ["12"]}}, "total_cards": 3}
+    reservation = {
+        "asset_ids": ["11"],
+        "asset_locations": [{"game": "Game", "card": "Card B", "asset_id": "11"}],
+    }
+
+    # A reservation cannot be restored into a different card while the same
+    # Steam asset ID is already present elsewhere in the cached inventory.
+    assert restore_reserved_assets(cache, reservation) is None
+    assert cache["games"]["Game"]["Card A"] == ["10", "11"]
+
+
+def test_restore_reserved_assets_rejects_duplicate_id_already_cached_in_same_location():
+    from funpay_orders import restore_reserved_assets
+
+    cache = {"games": {"Game": {"Card A": ["10", "11"]}}, "total_cards": 2}
+    reservation = {
+        "asset_ids": ["11"],
+        "asset_locations": [{"game": "Game", "card": "Card A", "asset_id": "11"}],
+    }
+
+    restored = restore_reserved_assets(cache, reservation)
+    assert restored is not None
+    assert restored["games"]["Game"]["Card A"] == ["10", "11"]
+    assert restored["total_cards"] == 2
 
