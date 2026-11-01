@@ -739,7 +739,10 @@ def funpay_cold_start_blockers(orders: dict) -> list[tuple[str, str]]:
             blockers.append((str(key), "invalid_record"))
             continue
         status = str(record.get("status", "unknown"))
-        if status not in {"completed", "cancelled", "refunded"} or record.get("reservation"):
+        has_reservation = bool(record.get("reservation"))
+        # A cancelled/refunded record is terminal only after its reservation
+        # has been cleared; leftover asset ownership must block cold start.
+        if status not in {"completed", "cancelled", "refunded"} or has_reservation:
             blockers.append((str(key), status))
     return blockers
 
