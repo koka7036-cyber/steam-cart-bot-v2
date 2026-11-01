@@ -128,6 +128,9 @@ def test_funpay_order_flow_supports_text_only_trade_urls_refunds_and_exact_admin
     assert 'call.data.startswith("fporderselect:")' in source
     assert "pending_funpay_input_selections" in source
     assert "FunPay-вложение не поддерживается" in source
+    assert "Ожидается только текстовая Steam Trade URL" in source
+    assert "download_text_attachment(" not in source
+    assert "input_kind = \"text_attachment\"" not in source
 
 
 def test_telegram_polling_uses_supported_sync_timeout_arguments():
