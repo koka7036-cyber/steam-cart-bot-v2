@@ -44,3 +44,24 @@ def test_unknown_section_does_not_mutate_navigation_state():
     nav = AdminNavigation()
     assert nav.open(100, "unknown") == MAIN
     assert nav.current(100) == MAIN
+
+
+def test_nested_section_cannot_open_without_its_parent():
+    nav = AdminNavigation()
+    assert nav.open(100, STEAM_AUTH) == MAIN
+    assert nav.current(100) == MAIN
+
+
+def test_nested_screen_cannot_open_from_another_top_level_section():
+    nav = AdminNavigation()
+    nav.open(100, FUNPAY)
+    assert nav.open(100, STEAM_AUTH) == FUNPAY
+    assert nav.current(100) == FUNPAY
+
+
+def test_reopening_existing_parent_unwinds_nested_screen():
+    nav = AdminNavigation()
+    nav.open(100, SETTINGS)
+    nav.open(100, STEAM_AUTH)
+    assert nav.open(100, SETTINGS) == SETTINGS
+    assert nav.back(100) == MAIN
