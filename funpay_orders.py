@@ -607,7 +607,9 @@ def filter_reserved_assets(cache_data: dict, orders: dict | None = None,
 
     reserved_ids = set()
     for record in orders.values():
-        if not isinstance(record, dict) or record.get("status") == "cancelled":
+        if not isinstance(record, dict):
+            continue
+        if record.get("status") == "cancelled":
             continue
         reservation = record.get("reservation")
         if isinstance(reservation, dict):
@@ -693,7 +695,12 @@ def funpay_cold_start_blockers(orders: dict) -> list[tuple[str, str]]:
             blockers.append((str(key), "invalid_record"))
             continue
         status = str(record.get("status", "unknown"))
-        if status not in {"completed", "cancelled", "refunded"} or record.get("reservation"):
+        has_reservation = bool(record.get("reservation"))
+        # Cancelled orders are terminal and their stock is intentionally released
+        # by the cancellation flow; legacy reservation metadata must not block cold start.
+        if status not in {"completed", "cancelled", "refunded"} or (
+            has_reservation and status != "cancelled"
+        ):
             blockers.append((str(key), status))
     return blockers
 

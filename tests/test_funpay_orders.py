@@ -374,6 +374,14 @@ def test_cold_start_allows_only_terminal_orders_without_reservations():
     }) == [("bad", "completed")]
 
 
+    assert funpay_cold_start_blockers({
+        "cancelled_with_legacy_reservation": {
+            "status": "cancelled",
+            "reservation": {"asset_ids": ["123"]},
+        },
+    }) == []
+
+
 def test_inventory_cache_freshness_guard():
     now = 1_800_000_000
     assert inventory_cache_freshness_error({"updated_at": now, "games": {}}, now=now) is None
