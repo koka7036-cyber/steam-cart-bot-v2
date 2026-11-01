@@ -45,6 +45,15 @@ class DispatcherPolicyTests(unittest.TestCase):
             )
             self.assertFalse(validate_issue(issue(body=body)).eligible, path)
 
+    def test_rejects_dotenv_files_at_any_depth(self):
+        for path in (".env", "./.env", "config/.env", "nested/config/.env"):
+            body = (
+                "Implement a bounded parser test with documentation.\n"
+                "Files to change:\n"
+                f"- {path}"
+            )
+            self.assertFalse(validate_issue(issue(body=body)).eligible, path)
+
     def test_rejects_live_operations(self):
         body = (
             "Implement a change to perform live sale through Steam POST and test it. "
