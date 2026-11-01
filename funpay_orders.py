@@ -9,6 +9,8 @@ from __future__ import annotations
 import copy
 import hashlib
 import html
+import json
+import os
 import re
 import time
 from html.parser import HTMLParser
@@ -16,6 +18,34 @@ from urllib.parse import parse_qs, urljoin, urlparse
 
 
 OPEN_STATUSES = {"awaiting_input", "input_received", "reserved", "review", "retry_required", "sending", "delivery_uncertain", "refund_review"}
+
+
+class FunPayLedgerIntegrityError(RuntimeError):
+    """Raised when the persisted FunPay order ledger cannot be trusted."""
+
+
+def load_funpay_order_ledger(path) -> dict:
+    """Read the FunPay order ledger without silently replacing corruption with an empty map."""
+    if not os.path.exists(path):
+        return {"orders": {}}
+    try:
+        with open(path, "r", encoding="utf-8") as ledger_file:
+            data = json.load(ledger_file)
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise FunPayLedgerIntegrityError(
+            "Журнал заказов FunPay не читается; резервирование и выдача заблокированы."
+        ) from exc
+    if not isinstance(data, dict) or not isinstance(data.get("orders"), dict):
+        raise FunPayLedgerIntegrityError(
+            "Структура журнала заказов FunPay повреждена; резервирование и выдача заблокированы."
+        )
+    if "refunds" in data and not isinstance(data.get("refunds"), dict):
+        raise FunPayLedgerIntegrityError(
+            "Раздел возвратов журнала FunPay повреждён; выдача заблокирована."
+        )
+    return data
+
+
 
 def count_cancelled_orders(orders) -> int:
     """Count cancelled/refunded FunPay orders once, including legacy refund flags."""
