@@ -757,6 +757,7 @@ def send_funpay_chat_message(node_id, text):
 from order_parser import detect_order_sets_and_quantity, is_funpay_refund_notification, is_paid_order_notification
 from funpay_orders import (compact_funpay_text, decode_text_attachment, download_text_attachment, extract_order_number, extract_steam_trade_url, extract_text_attachment_href, filter_reserved_assets, find_open_order_for_chat, funpay_cold_start_blockers, funpay_input_signature, inventory_cache_freshness_error, mark_input_received, open_orders_for_chat, parse_funpay_history_payload, register_payment, message_signature, restore_reserved_assets, summarize_funpay_chat_diagnostics, voucher_redemption_block_reason, voucher_reset_block_reason)
 from sales_analytics import summarize_sales
+from steam_delivery import classify_steam_trade_offer_response
 from playerok_orders import (
     active_orders_for_chat,
     load_orders as load_playerok_orders,
@@ -1981,22 +1982,19 @@ def send_trade_offer(trade_url, asset_ids, code):
         # Quarantine the items and do not automatically repeat the POST.
         return "unknown", f"Связь со Steam прервалась ({type(exc).__name__}); результат неясен.", None
 
-    if response.status_code >= 500:
-        return "unknown", f"Steam вернул HTTP {response.status_code}; результат создания предложения неясен.", None
     try:
         res_json = response.json()
     except (ValueError, requests.RequestException):
-        if response.status_code >= 400:
-            return "failed", f"Steam отклонил запрос (HTTP {response.status_code}).", None
-        return "unknown", "Steam вернул непонятный ответ; результат создания предложения неясен.", None
+        outcome, result_message, offer_id = classify_steam_trade_offer_response(
+            response.status_code, None
+        )
+        return outcome, result_message, offer_id
 
-    if response.status_code >= 400 or not isinstance(res_json, dict):
-        return "failed", f"Steam отклонил запрос (HTTP {response.status_code}).", None
-    if "tradeofferid" not in res_json:
-        error_text = str(res_json.get("strError") or "Steam не вернул ID предложения")[:240]
-        return "failed", f"Steam отклонил обмен: {error_text}", None
-
-    offer_id = str(res_json["tradeofferid"])
+    outcome, result_message, offer_id = classify_steam_trade_offer_response(
+        response.status_code, res_json
+    )
+    if outcome != "created":
+        return outcome, result_message, offer_id
     time.sleep(2)
     confirmation_ok, confirmation_message = asf_command(f"2faok {STEAM_LOGIN}")
     if confirmation_ok:
