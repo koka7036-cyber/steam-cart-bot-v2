@@ -755,7 +755,7 @@ def send_funpay_chat_message(node_id, text):
         return False, f"Ошибка отправки: {e}"
 
 from order_parser import detect_order_sets_and_quantity, is_funpay_refund_notification, is_paid_order_notification
-from funpay_orders import (compact_funpay_text, decode_text_attachment, download_text_attachment, extract_order_number, extract_steam_trade_url, extract_text_attachment_href, filter_reserved_assets, find_open_order_for_chat, funpay_cold_start_blockers, funpay_input_signature, inventory_cache_freshness_error, mark_input_received, open_orders_for_chat, parse_funpay_history_payload, register_payment, message_signature, restore_reserved_assets, summarize_funpay_chat_diagnostics, voucher_redemption_block_reason, voucher_reset_block_reason)
+from funpay_orders import (compact_funpay_text, extract_order_number, extract_steam_trade_url, filter_reserved_assets, find_open_order_for_chat, funpay_cold_start_blockers, funpay_input_signature, inventory_cache_freshness_error, mark_input_received, open_orders_for_chat, parse_funpay_history_payload, register_payment, message_signature, restore_reserved_assets, summarize_funpay_chat_diagnostics, voucher_redemption_block_reason, voucher_reset_block_reason)
 from sales_analytics import summarize_sales
 from playerok_orders import (
     active_orders_for_chat,
@@ -1126,7 +1126,6 @@ def record_funpay_buyer_input(node_id, trade_url, input_kind, selected_order_key
         return record, record["status"], result_message
 
 
-MAX_FUNPAY_TEXT_ATTACHMENT_BYTES = 64 * 1024
 
 
 def apply_reserved_assets_to_cache(cache_data, orders=None, vouchers=None):
@@ -1455,26 +1454,17 @@ def funpay_check_unread_chats():
                         f"Покупатель: {sender_name}\n"
                         f"Лот: {event_sets} сет. × {event_quantity} шт.\n"
                         f"Резерв: {record.get('status')}.\n"
-                        "Ожидается trade-ссылка или текстовый файл с одной Steam trade-ссылкой."
+                        "Ожидается только Steam Trade URL обычным текстовым сообщением в чате."
                     )
 
-            chat_page_url = f"https://funpay.com/chat/?node={node_id}"
-            attachment_href = (
-                extract_text_attachment_href(last_message_html, chat_page_url)
-                if last_message_html else None
-            )
             has_file = bool(
-                attachment_href
-                or (
-                    last_message_html and re.search(
-                        r"(?:chat-msg-(?:file|attachment)|data-type=['\"]attachment['\"])",
-                        last_message_html, re.IGNORECASE
-                    )
+                last_message_html and re.search(
+                    r"(?:chat-msg-(?:file|attachment)|data-type=['\\\"]attachment['\\\"])",
+                    last_message_html, re.IGNORECASE
                 )
-                or re.search(r"\b(?:файл|вложение|attachment)\b", msg_preview, re.IGNORECASE)
-            )
+            ) or re.search(r"\\b(?:файл|вложение|attachment)\\b", msg_preview, re.IGNORECASE)
 
-            if not latest_buyer_message or (not full_text.strip() and not attachment_href and not has_file):
+            if not latest_buyer_message or (not full_text.strip() and not has_file):
                 # A latest system alert is not buyer input. Cancel any stale in-memory
                 # order-selection prompt for this chat; an older URL must not survive a refund.
                 for token, pending in list(pending_funpay_input_selections.items()):
@@ -1509,40 +1499,12 @@ def funpay_check_unread_chats():
             input_kind = "chat_trade_url"
             input_error = None
 
-            # FunPay file-exchange supports a small text file. Only download one
-            # unambiguous FunPay-hosted attachment; never accept external redirects.
-            if not trade_url and attachment_href:
-                try:
-                    attachment_text = download_text_attachment(
-                        s,
-                        attachment_href,
-                        max_bytes=MAX_FUNPAY_TEXT_ATTACHMENT_BYTES,
-                        referer_url=chat_page_url,
-                    )
-                    trade_url = extract_steam_trade_url(attachment_text)
-                    if trade_url:
-                        input_kind = "text_attachment"
-                    else:
-                        input_error = (
-                            "В текстовом файле должна быть ровно одна корректная Steam trade-ссылка "
-                            "с параметрами partner и token."
-                        )
-                except (ValueError, requests.RequestException) as exc:
-                    input_error = f"Не удалось безопасно прочитать текстовый файл: {str(exc)[:180]}"
-                except Exception as exc:
-                    logging.warning(
-                        "FunPay text attachment failed for chat %s: %s",
-                        node_id,
-                        type(exc).__name__,
-                    )
-                    input_error = "Не удалось безопасно прочитать текстовый файл. Отправь ссылку обычным сообщением."
-
             if not trade_url and not input_error and contains_trade_url:
                 input_error = "В сообщении есть похожая на Steam trade-ссылку строка, но формат ссылки некорректен."
             elif not trade_url and not input_error and has_file:
                 input_error = (
-                    "Вложение не распознано как текстовый файл FunPay. "
-                    "Прикрепи небольшой .txt/.csv/.log с одной Steam trade-ссылкой."
+                    "Вложение не является поддерживаемым способом передачи ссылки. "
+                    "Отправь Steam Trade URL обычным текстовым сообщением."
                 )
 
             if trade_url:
