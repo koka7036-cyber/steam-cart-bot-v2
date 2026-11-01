@@ -22,6 +22,7 @@ from steam_inventory import (
     SteamInventoryRateLimitError,
     collect_inventory_pages,
 )
+from steam_session_diagnostics import classify_session_metadata
 
 # --- КОНФИГУРАЦИЯ ---
 TG_TOKEN = os.getenv("TG_TOKEN", "")
@@ -2758,9 +2759,14 @@ def funpay_chat_diagnostic_cmd(message):
         lines.append("  Причина: " + freshness_error)
 
     steam_session = load_json(SESSION_FILE, {})
-    steam_age = time.time() - float(steam_session.get("timestamp", 0) or 0)
-    steam_ok = bool(steam_session.get("steamLoginSecure")) and 0 <= steam_age < 43200
-    lines.append("Steam-сессия: " + ("актуальна по локальному сроку" if steam_ok else "отсутствует/устарела"))
+    steam_state = classify_session_metadata(steam_session)
+    steam_ok = steam_state == "fresh_by_local_ttl"
+    steam_status = (
+        "свежая по локальному таймеру; серверная проверка не выполнялась"
+        if steam_ok
+        else "отсутствует/устарела"
+    )
+    lines.append("Steam-сессия: " + steam_status)
     asf_ok, _asf_message = asf_command("status")
     lines.append("ASF: " + ("доступен" if asf_ok else "не отвечает/не запущен"))
     lines.append("Приём ссылок: " + ("ВКЛ" if policy["allow_chat_trade_url"] else "ВЫКЛ"))
@@ -3367,17 +3373,21 @@ def handle_all_messages(message):
             return
         if text == "🔐 Авторизация Steam":
             sess = load_json(SESSION_FILE, {})
-            valid = bool(sess.get("steamLoginSecure") and time.time() - sess.get("timestamp", 0) < 43200)
+            steam_state = classify_session_metadata(sess)
+            valid = steam_state == "fresh_by_local_ttl"
             markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
             markup.add("🔑 Войти в Steam", "📡 Статус Steam")
             markup.add("⬅️ Назад")
-            bot.send_message(message.chat.id, "🔐 <b>Авторизация Steam</b>\nСессия: " + ("действует по локальному таймеру" if valid else "нет действующей локальной сессии") + "\nПароль запрашивается только по команде входа. Не отправляй пароль в группы; бот попробует удалить сообщение сразу после получения. Удаление не гарантировано.", reply_markup=markup, parse_mode="HTML")
+            session_status = "свежая по локальному таймеру; серверная проверка не выполнялась" if valid else "нет действующей локальной сессии"
+            bot.send_message(message.chat.id, "🔐 <b>Авторизация Steam</b>\nСессия: " + session_status + "\nПароль запрашивается только по команде входа. Не отправляй пароль в группы; бот попробует удалить сообщение сразу после получения. Удаление не гарантировано.", reply_markup=markup, parse_mode="HTML")
             return
         if text == "📡 Статус Steam":
             sess = load_json(SESSION_FILE, {})
-            valid = bool(sess.get("steamLoginSecure") and time.time() - sess.get("timestamp", 0) < 43200)
+            steam_state = classify_session_metadata(sess)
+            valid = steam_state == "fresh_by_local_ttl"
             asf_ok, _ = asf_command("status")
-            bot.send_message(message.chat.id, "Steam-сессия: " + ("по таймеру активна" if valid else "отсутствует или устарела") + "\nЛогин задан: " + ("да" if STEAM_LOGIN else "нет") + "\nASF: " + ("доступен" if asf_ok else "не отвечает/не запущен"), reply_markup=build_admin_keyboard())
+            steam_status = "свежая по локальному таймеру; серверная проверка не выполнялась" if valid else "отсутствует или устарела"
+            bot.send_message(message.chat.id, "Steam-сессия: " + steam_status + "\nЛогин задан: " + ("да" if STEAM_LOGIN else "нет") + "\nASF: " + ("доступен" if asf_ok else "не отвечает/не запущен"), reply_markup=build_admin_keyboard())
             return
         if text == "🔑 Войти в Steam":
             pending_steam_password_admin.add(message.chat.id)
@@ -3424,17 +3434,20 @@ def handle_all_messages(message):
             cfg = load_json(FP_CONFIG_FILE, {})
             playerok_configured = bool(os.getenv("PLAYEROK_TOKEN", "").strip())
             steam_session = load_json(SESSION_FILE, {})
-            steam_session_age = time.time() - float(steam_session.get("timestamp", 0) or 0)
-            steam_session_valid = bool(steam_session.get("steamLoginSecure")) and 0 <= steam_session_age < 43200
+            steam_session_state = classify_session_metadata(steam_session)
             try:
                 cache_age = time.time() - os.path.getmtime(CACHE_FILE)
                 cache_status = f"обновлён {int(cache_age // 60)} мин. назад"
             except OSError:
                 cache_status = "файл отсутствует"
-            if steam_session_valid:
+            if steam_session_state == "fresh_by_local_ttl":
                 steam_status = "свежая по локальному таймеру; серверная проверка не выполнялась"
-            elif steam_session.get("steamLoginSecure"):
+            elif steam_session_state == "expired_local_ttl":
                 steam_status = "устарела по локальному таймеру; нужна повторная авторизация"
+            elif steam_session_state == "future_timestamp":
+                steam_status = "время сессии из будущего; нужна повторная авторизация"
+            elif steam_session_state == "invalid_or_missing_timestamp":
+                steam_status = "время сессии недействительно; нужна повторная авторизация"
             else:
                 steam_status = "не найдена; нужна авторизация"
             installed_revision = get_installed_revision()
