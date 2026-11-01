@@ -117,6 +117,31 @@ def restore_reserved_assets(cache: dict, reservation: dict) -> dict | None:
     if set(normalized_ids) != set(location_ids):
         return None
 
+    # If an asset ID is already cached at a different location, its ownership
+    # conflicts with this reservation. Do not silently re-home or duplicate it.
+    cached_locations = {}
+    for cached_game, cached_cards in games.items():
+        if not isinstance(cached_cards, dict):
+            return None
+        for cached_card, cached_ids in cached_cards.items():
+            if not isinstance(cached_ids, list):
+                return None
+            for cached_id in cached_ids:
+                normalized_cached_id = str(cached_id)
+                if not normalized_cached_id.isdigit():
+                    return None
+                previous = cached_locations.get(normalized_cached_id)
+                current = (cached_game, cached_card)
+                if previous is not None and previous != current:
+                    return None
+                cached_locations[normalized_cached_id] = current
+
+    for item in normalized_locations:
+        existing_location = cached_locations.get(item["asset_id"])
+        expected_location = (item["game"], item["card"])
+        if existing_location is not None and existing_location != expected_location:
+            return None
+
     restored = copy.deepcopy(cache)
     restored_games = restored["games"]
     for item in normalized_locations:
