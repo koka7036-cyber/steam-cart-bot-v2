@@ -138,7 +138,7 @@ jobs:
           done < <(git ls-files --others --exclude-standard -z)
 
           if [[ ! -s "$patch_file" ]]; then
-            printf 'No changes produced.\\n' > "$patch_file"
+            printf 'No changes produced.\n' > "$patch_file"
           fi
 
           # Fail closed if the generated patch cannot be applied cleanly.
