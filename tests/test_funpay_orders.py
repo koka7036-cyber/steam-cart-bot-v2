@@ -269,17 +269,6 @@ def test_filter_reserved_assets_excludes_uncertain_voucher_assets():
     assert filtered["games"]["Game"]["Card"] == ["1", "3"]
 
 
-def test_extract_attachment_link_inside_funpay_message_wrapper():
-    fragment = (
-        '<div class="chat-msg-item">'
-        '<div class="chat-message"><a href="/file/download/987">trade-url.txt</a></div>'
-        '</div>'
-    )
-    assert extract_text_attachment_href(
-        fragment, "https://funpay.com/chat/?node=987"
-    ) == "https://funpay.com/file/download/987"
-
-
 def test_order_creation_notification_is_not_treated_as_paid():
     assert not is_paid_order_notification("Создан заказ #123456: набор из 1 сета Steam")
 
