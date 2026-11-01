@@ -119,6 +119,13 @@ def test_funpay_watcher_uses_trusted_history_and_bounds_telegram_notice():
 
 
 
+def test_inventory_rate_limit_message_uses_server_retry_after():
+    source = read_project_file("bot.py")
+    assert 'response.headers.get("Retry-After")' in source
+    assert 'retry_after_seconds' in source
+    assert "не раньше чем через" in source
+
+
 def test_funpay_order_flow_supports_text_only_trade_urls_refunds_and_exact_admin_selection():
     source = read_project_file("bot.py")
     assert "def register_funpay_refund(" in source
