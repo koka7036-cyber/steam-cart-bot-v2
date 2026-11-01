@@ -2994,7 +2994,7 @@ def set_fp_key(message):
         bot.send_message(
             message.chat.id,
             f"✅ **FunPay подключен.** (ID: `{fp_state['user_id']}`)\n"
-            "Автоматизация принимает Steam Trade URL обычным сообщением или небольшим текстовым файлом, прикреплённым к чату заказа. Внешние ссылки не используются.",
+            "Автоматизация принимает Steam Trade URL обычным сообщением или небольшим обычным текстовым сообщением, прикреплённым к чату заказа. Внешние ссылки не используются.",
             reply_markup=build_admin_keyboard(),
             parse_mode="Markdown"
         )
@@ -3022,7 +3022,7 @@ def build_funpay_dashboard_text():
     completed = counts.get("completed", 0)
     cancelled = counts.get("cancelled", 0)
     mode = policy.get("input_mode", "both")
-    mode_label = {"file": "📎 Текстовый файл", "chat": "💬 Чат", "both": "💬 Чат + 📎 текстовый файл", "chat_only": "💬 Чат + 📎 текстовый файл"}.get(mode, mode)
+    mode_label = {"file": "📎 Текстовый файл", "chat": "💬 Чат", "both": "💬 Чат + 📎 текстовый файл", "chat_only": "💬 Только текстовая trade-ссылка"}.get(mode, mode)
 
     return (
         "📊 <b>ПАНЕЛЬ FUNPAY</b>\n"
