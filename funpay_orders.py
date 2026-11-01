@@ -482,8 +482,13 @@ def _safe_attachment_response_diagnostic(response) -> str:
     )
 
 
-def download_text_attachment(session, attachment_url: str,
-                            max_bytes: int = _MAX_TEXT_ATTACHMENT_BYTES) -> str:
+def download_text_attachment(
+    session,
+    attachment_url: str,
+    max_bytes: int = _MAX_TEXT_ATTACHMENT_BYTES,
+    *,
+    referer_url: str | None = None,
+) -> str:
     """Download one small, trusted FunPay text attachment and decode it safely.
 
     Redirects outside FunPay, HTML/login pages, oversized files and binary data
@@ -492,7 +497,19 @@ def download_text_attachment(session, attachment_url: str,
     if not _is_trusted_funpay_url(attachment_url):
         raise ValueError("Ссылка на вложение находится вне домена FunPay.")
 
-    response = session.get(attachment_url, timeout=10, stream=True)
+    request_headers = {}
+    if referer_url is not None:
+        if not _is_trusted_funpay_url(referer_url):
+            raise ValueError("Referer вложения находится вне домена FunPay.")
+        request_headers["Referer"] = referer_url
+    request_headers["Accept"] = "text/plain, text/*;q=0.9, */*;q=0.1"
+
+    response = session.get(
+        attachment_url,
+        timeout=10,
+        stream=True,
+        headers=request_headers,
+    )
     try:
         response.raise_for_status()
         final_url = getattr(response, "url", attachment_url) or attachment_url
