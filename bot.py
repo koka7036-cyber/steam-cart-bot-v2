@@ -2510,71 +2510,91 @@ def reset_voucher_cmd(message):
 
 @bot.message_handler(commands=["fpcoldstart"])
 def funpay_cold_start_cmd(message):
-    """Safely archive and clear only the FunPay order ledger after confirmation."""
+    """Safely archive and clear the FunPay order ledger under one lock."""
     db = load_json(DB_FILE, {"admin_id": None, "vouchers": {}})
     if message.chat.id != db.get("admin_id") or message.from_user.id != db.get("admin_id"):
         return
 
     parts = (message.text or "").strip().split(maxsplit=1)
+    response_text = None
+    response_parse_mode = None
     try:
+        # Keep the same lock from the last ledger read through blocker validation,
+        # backup creation and replacement. A concurrent payment/refund worker
+        # cannot insert a new order between the check and the clear.
         with funpay_orders_lock:
             data = load_funpay_orders()
+            orders = data.get("orders", {})
+            confirmed = len(parts) >= 2 and parts[1].strip().upper() == "CONFIRM"
+
+            if not confirmed:
+                counts = {}
+                for item in orders.values():
+                    if isinstance(item, dict):
+                        status = str(item.get("status", "unknown"))
+                        counts[status] = counts.get(status, 0) + 1
+                summary = ", ".join(
+                    f"{status}: {count}" for status, count in sorted(counts.items())
+                ) or "нет записей"
+                response_text = (
+                    "🧹 <b>Подготовка к чистому старту FunPay</b>\n"
+                    f"Записей в журнале: {len(orders)}\nСтатусы: {html.escape(summary)}\n\n"
+                    "Команда удалит только журнал заказов FunPay после создания резервной копии. "
+                    "Склад, кэш карточек, коды, настройки и Playerok не изменятся.\n"
+                    "Если заказов действительно нет и ты хочешь продолжить, отправь: "
+                    "<code>/fpcoldstart CONFIRM</code>"
+                )
+                response_parse_mode = "HTML"
+            else:
+                blockers = funpay_cold_start_blockers(orders)
+                if blockers:
+                    preview = ", ".join(
+                        f"{key} ({status})" for key, status in blockers[:5]
+                    )
+                    more = f" и ещё {len(blockers) - 5}" if len(blockers) > 5 else ""
+                    response_text = (
+                        "❌ Журнал FunPay не очищен: есть незавершённые заказы или активные резервы. "
+                        "Очистка потеряла бы защиту от повторной продажи тех же карточек.\n"
+                        f"Заказы: {html.escape(preview + more)}\n"
+                        "Сначала завершите заказ или выполните /fprelease только если Steam-предложение точно не создавалось. "
+                        "Для отправленного/неопределённого предложения сначала проверьте Steam и используйте "
+                        "/fpofferresolve КЛЮЧ accepted|returned.\n"
+                        "После завершения всех заказов команда /fpcoldstart CONFIRM снова станет доступна."
+                    )
+                elif not orders:
+                    response_text = "Журнал FunPay уже пуст. Склад и остальные данные не менялись."
+                else:
+                    import shutil
+                    from datetime import datetime
+
+                    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    backup_path = f"{FP_ORDERS_FILE}.backup_{stamp}.json"
+                    shutil.copy2(FP_ORDERS_FILE, backup_path)
+                    save_json(FP_ORDERS_FILE, {"orders": {}})
+                    logging.warning(
+                        "Admin requested FunPay cold start; archived %s orders to %s",
+                        len(orders),
+                        backup_path,
+                    )
+                    response_text = (
+                        f"✅ Чистый старт FunPay выполнен. Резервная копия: {os.path.basename(backup_path)}. "
+                        "Склад, кэш, коды и настройки не изменялись."
+                    )
     except FunPayLedgerIntegrityError:
         notify_funpay_ledger_integrity(message.chat.id, "/fpcoldstart")
         return
-    orders = data.get("orders", {})
-    if len(parts) < 2 or parts[1].strip().upper() != "CONFIRM":
-        counts = {}
-        for item in orders.values():
-            if isinstance(item, dict):
-                status = str(item.get("status", "unknown"))
-                counts[status] = counts.get(status, 0) + 1
-        summary = ", ".join(f"{status}: {count}" for status, count in sorted(counts.items())) or "нет записей"
-        bot.send_message(
-            message.chat.id,
-            "🧹 <b>Подготовка к чистому старту FunPay</b>\n"
-            f"Записей в журнале: {len(orders)}\nСтатусы: {html.escape(summary)}\n\n"
-            "Команда удалит только журнал заказов FunPay после создания резервной копии. "
-            "Склад, кэш карточек, коды, настройки и Playerok не изменятся.\n"
-            "Если заказов действительно нет и ты хочешь продолжить, отправь: "
-            "<code>/fpcoldstart CONFIRM</code>",
-            parse_mode="HTML",
-        )
-        return
 
-    blockers = funpay_cold_start_blockers(orders)
-    if blockers:
-        preview = ", ".join(f"{key} ({status})" for key, status in blockers[:5])
-        more = f" и ещё {len(blockers) - 5}" if len(blockers) > 5 else ""
-        bot.send_message(
-            message.chat.id,
-            "❌ Журнал FunPay не очищен: есть незавершённые заказы или активные резервы. "
-            "Очистка потеряла бы защиту от повторной продажи тех же карточек.\n"
-            f"Заказы: {html.escape(preview + more)}\n"
-            "Сначала завершите заказ или выполните /fprelease только если Steam-предложение точно не создавалось. "
-            "Для отправленного/неопределённого предложения сначала проверьте Steam и используйте "
-            "/fpofferresolve КЛЮЧ accepted|returned.\n"
-            "После завершения всех заказов команда /fpcoldstart CONFIRM снова станет доступна."
-        )
-        return
+    # Do not hold the ledger lock while waiting for the Telegram API.
+    if response_text is not None:
+        if response_parse_mode:
+            bot.send_message(
+                message.chat.id,
+                response_text,
+                parse_mode=response_parse_mode,
+            )
+        else:
+            bot.send_message(message.chat.id, response_text)
 
-    if not orders:
-        bot.send_message(message.chat.id, "Журнал FunPay уже пуст. Склад и остальные данные не менялись.")
-        return
-
-    import shutil
-    from datetime import datetime
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_path = f"{FP_ORDERS_FILE}.backup_{stamp}.json"
-    shutil.copy2(FP_ORDERS_FILE, backup_path)
-    save_json(FP_ORDERS_FILE, {"orders": {}})
-    logging.warning("Admin requested FunPay cold start; archived %s orders to %s", len(orders), backup_path)
-
-    bot.send_message(
-        message.chat.id,
-        f"✅ Чистый старт FunPay выполнен. Резервная копия: {os.path.basename(backup_path)}. "
-        "Склад, кэш, коды и настройки не изменялись."
-    )
 
 
 @bot.message_handler(commands=["fpdiag"])
