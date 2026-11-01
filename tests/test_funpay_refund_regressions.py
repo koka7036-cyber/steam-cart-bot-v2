@@ -110,3 +110,38 @@ def test_funpay_background_worker_notifies_admin_and_never_rebuilds_corrupt_ledg
     assert 'load_funpay_orders()' not in worker.split("last_ping_time = 0", 1)[1].split("while True:", 1)[0]
     assert "load_funpay_order_ledger" not in worker
     assert "        return\n    except Exception:" in worker
+
+
+
+def test_funpay_admin_commands_catch_ledger_integrity_without_skipping_normal_paths():
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "bot.py").read_text(encoding="utf-8-sig")
+    expected = {
+        "def funpay_cold_start_cmd(message):": 'notify_funpay_ledger_integrity(message.chat.id, "/fpcoldstart")',
+        "def funpay_offer_resolve_cmd(message):": 'notify_funpay_ledger_integrity(message.chat.id, "/fpofferresolve")',
+        "def funpay_release_cmd(message):": 'notify_funpay_ledger_integrity(message.chat.id, "/fprelease")',
+        "def show_funpay_dashboard(message):": 'notify_funpay_ledger_integrity(message.chat.id, "панель FunPay")',
+    }
+    for function, notification in expected.items():
+        start = source.index(function)
+        next_handler = source.find("\\n@bot.", start + len(function))
+        block = source[start:next_handler if next_handler >= 0 else len(source)]
+        assert "except FunPayLedgerIntegrityError:" in block
+        assert notification in block
+        assert "        return\\n    except" not in block
+
+    cold_start_start = source.index("def funpay_cold_start_cmd")
+    cold_start_end = source.index("\\n@bot.", cold_start_start)
+    cold_start = source[cold_start_start:cold_start_end]
+    assert "funpay_cold_start_blockers(orders)" in cold_start
+
+    offer_start = source.index("def funpay_offer_resolve_cmd")
+    offer_end = source.index("\\n@bot.", offer_start)
+    assert 'record["status"] = "completed"' in source[offer_start:offer_end]
+
+    release_start = source.index("def funpay_release_cmd")
+    release_end = source.index("\\n@bot.", release_start)
+    release = source[release_start:release_end]
+    assert "funpay_release_refund_block_reason(record)" in release
+    assert 'record["status"] = "cancelled"' in release
