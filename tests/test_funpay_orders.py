@@ -1095,3 +1095,43 @@ def test_funpay_diagnostic_does_not_reuse_old_buyer_url_after_latest_refund():
     assert result["latest_buyer_input"]["has_trade_url"] is False
     assert "OLD_SECRET" not in repr(result)
 
+
+
+def test_funpay_ledger_strict_loader_distinguishes_missing_from_corrupted_file(tmp_path):
+    import json
+    import pytest
+    from funpay_orders import load_funpay_orders
+
+    missing = tmp_path / "missing-orders.json"
+    assert load_funpay_orders(missing) == {"orders": {}}
+
+    corrupted = tmp_path / "corrupted-orders.json"
+    corrupted.write_text('{"orders": ', encoding="utf-8")
+    with pytest.raises((ValueError, json.JSONDecodeError)):
+        load_funpay_orders(corrupted)
+
+
+def test_funpay_ledger_strict_loader_rejects_invalid_root_and_orders_shape(tmp_path):
+    import pytest
+    from funpay_orders import load_funpay_orders
+
+    invalid_root = tmp_path / "root.json"
+    invalid_root.write_text('[]', encoding="utf-8")
+    with pytest.raises(ValueError):
+        load_funpay_orders(invalid_root)
+
+    invalid_orders = tmp_path / "orders.json"
+    invalid_orders.write_text('{"orders": []}', encoding="utf-8")
+    with pytest.raises(ValueError):
+        load_funpay_orders(invalid_orders)
+
+
+def test_funpay_ledger_strict_loader_rejects_non_dict_order_records(tmp_path):
+    import pytest
+    from funpay_orders import load_funpay_orders
+
+    invalid_record = tmp_path / "invalid-record.json"
+    invalid_record.write_text('{"orders": {"order-1": null}}', encoding="utf-8")
+
+    with pytest.raises(ValueError, match="order record"):
+        load_funpay_orders(invalid_record)
