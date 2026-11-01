@@ -109,3 +109,4 @@ def test_funpay_background_worker_notifies_admin_and_never_rebuilds_corrupt_ledg
     assert 'notify_funpay_ledger_integrity(db.get("admin_id"), "восстановление после перезапуска")' in worker
     assert 'load_funpay_orders()' not in worker.split("last_ping_time = 0", 1)[1].split("while True:", 1)[0]
     assert "load_funpay_order_ledger" not in worker
+    assert "        return\n    except Exception:" in worker
