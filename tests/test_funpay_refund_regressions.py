@@ -26,6 +26,7 @@ def test_cancelled_order_reservation_remains_hidden_until_ledger_is_cleared():
     filtered = filter_reserved_assets(cache, orders=orders)
     assert filtered["games"]["Game"]["Card"] == ["23456"]
 
+
 def test_cancelled_order_without_reservation_releases_no_additional_assets():
     cache = {"games": {"Game": {"Card": ["12345", "23456"]}}}
     orders = {
@@ -48,6 +49,16 @@ def test_cancelled_order_with_reservation_blocks_cold_start():
         }
     }) == [("cancelled_with_legacy_reservation", "cancelled")]
 
+
+def test_cancelled_order_with_empty_reservation_container_blocks_cold_start():
+    for reservation in ({}, []):
+        blockers = funpay_cold_start_blockers({
+            "cancelled_corrupt_reservation": {
+                "status": "cancelled",
+                "reservation": reservation,
+            }
+        })
+        assert blockers == [("cancelled_corrupt_reservation", "cancelled")], reservation
 
 
 def test_fprelease_refund_guard_blocks_refund_flag_without_offer_id():
@@ -110,7 +121,6 @@ def test_funpay_background_worker_notifies_admin_and_never_rebuilds_corrupt_ledg
     assert 'load_funpay_orders()' not in worker.split("last_ping_time = 0", 1)[1].split("while True:", 1)[0]
     assert "load_funpay_order_ledger" not in worker
     assert "        return\n    except Exception:" in worker
-
 
 
 def test_funpay_admin_commands_catch_ledger_integrity_without_skipping_normal_paths():
