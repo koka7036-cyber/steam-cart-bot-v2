@@ -145,6 +145,14 @@ jobs:
           if grep -q '^diff --git ' "$patch_file"; then
             git apply --check --binary "$patch_file"
           fi
+
+          # Verify that every untracked regular file appears in the exported patch.
+          while IFS= read -r -d '' path; do
+            if [[ -f "$path" && ! -L "$path" ]] && ! grep -Fq -- "b/$path" "$patch_file"; then
+              echo "Untracked file is missing from proposed patch: $path" >&2
+              exit 1
+            fi
+          done < <(git ls-files --others --exclude-standard -z)
           cp "$patch_file" proposed.patch
 
       - name: Upload proposed patch for human review
