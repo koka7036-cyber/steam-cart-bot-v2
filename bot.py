@@ -755,7 +755,7 @@ def send_funpay_chat_message(node_id, text):
         return False, f"Ошибка отправки: {e}"
 
 from order_parser import detect_order_sets_and_quantity, is_funpay_refund_notification, is_paid_order_notification
-from funpay_orders import (compact_funpay_text, extract_order_number, extract_steam_trade_url, has_unsupported_funpay_attachment, filter_reserved_assets, find_open_order_for_chat, funpay_cold_start_blockers, funpay_input_signature, inventory_cache_freshness_error, mark_input_received, open_orders_for_chat, parse_funpay_history_payload, register_payment, message_signature, restore_reserved_assets, summarize_funpay_chat_diagnostics, funpay_release_refund_block_reason, voucher_redemption_block_reason, voucher_reset_block_reason)
+from funpay_orders import (compact_funpay_text, FunPayLedgerIntegrityError, load_funpay_order_ledger, extract_order_number, extract_steam_trade_url, has_unsupported_funpay_attachment, filter_reserved_assets, find_open_order_for_chat, funpay_cold_start_blockers, funpay_input_signature, inventory_cache_freshness_error, mark_input_received, open_orders_for_chat, parse_funpay_history_payload, register_payment, message_signature, restore_reserved_assets, summarize_funpay_chat_diagnostics, funpay_release_refund_block_reason, voucher_redemption_block_reason, voucher_reset_block_reason)
 from sales_analytics import summarize_sales
 from playerok_orders import (
     active_orders_for_chat,
@@ -769,12 +769,7 @@ from playerok_monitor import PlayerokMonitor
 
 
 def load_funpay_orders():
-    data = load_json(FP_ORDERS_FILE, {"orders": {}})
-    if not isinstance(data, dict):
-        data = {"orders": {}}
-    if not isinstance(data.get("orders"), dict):
-        data["orders"] = {}
-    return data
+    return load_funpay_order_ledger(FP_ORDERS_FILE)
 
 
 def get_funpay_delivery_policy():
