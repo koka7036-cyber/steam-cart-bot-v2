@@ -68,7 +68,13 @@ def normalize_platform_status(status: Any) -> str:
         return "rolled_back"
     if value in {"HAS_PROBLEM", "DEAL_HAS_PROBLEM", "PROBLEM"}:
         return "problem"
-    if value in {"PRO
+    if value in {"PROBLEM_RESOLVED", "DEAL_PROBLEM_RESOLVED"}:
+        return "problem_resolved"
+    return "unknown"
+
+
+ADMIN_NOTIFICATION_STATUSES = {"sent", "confirmed", "rolled_back", "problem", "problem_resolved"}
+
 
 def should_notify_admin_status_change(record: Any) -> bool:
     """Return whether a persisted platform status change merits an admin notice."""
