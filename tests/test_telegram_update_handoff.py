@@ -140,6 +140,40 @@ def test_funpay_order_flow_supports_text_only_trade_urls_refunds_and_exact_admin
     assert "input_kind = \"text_attachment\"" not in source
 
 
+def test_funpay_buyer_input_requires_reservation_before_marking_sending():
+    source = read_project_file("bot.py")
+    start = source.index("def record_funpay_buyer_input")
+    end = source.index("def ", start + 4)
+    function = source[start:end]
+    reserve_guard = function.index("if not record.get(\"reservation\"):")
+    no_stock_return = function.index('return record, "no_stock", reserve_message')
+    sending_transition = function.index('record["status"] = "sending"')
+    steam_call = function.index("send_trade_offer(")
+    assert reserve_guard < no_stock_return < sending_transition < steam_call
+    assert "not record.get(\"reservation\")" in function
+
+
+def test_funpay_payment_reservation_retry_is_limited_to_unreserved_awaiting_input():
+    source = read_project_file("bot.py")
+    start = source.index("def register_funpay_payment")
+    end = source.index("def register_funpay_refund", start)
+    function = source[start:end]
+    assert 'record.get("status") == "awaiting_input" and not record.get("reservation")' in function
+    assert "delivery_uncertain" not in function
+    assert "refund_review" not in function
+
+
+def test_funpay_stock_reservation_is_journaled_before_cache_mutation():
+    source = read_project_file("bot.py")
+    start = source.index("def reserve_funpay_order")
+    end = source.index("def register_funpay_payment", start)
+    function = source[start:end]
+    journal_write = function.index("save_json(FP_ORDERS_FILE, ledger_data)")
+    cache_write = function.index("save_json(CACHE_FILE, updated_cache)")
+    assert journal_write < cache_write
+    assert "if record.get(\"reservation\"):" in function
+
+
 def test_telegram_polling_uses_supported_sync_timeout_arguments():
     source = read_project_file("bot.py")
     polling_line = next(line for line in source.splitlines() if "bot.infinity_polling(" in line)
