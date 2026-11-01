@@ -1,5 +1,5 @@
 """Regression tests for safe FunPay order matching."""
-from funpay_orders import (extract_chat_message_fragments, extract_last_chat_message_fragment, extract_last_customer_message_fragment, extract_steam_trade_url, filter_reserved_assets, find_open_order_for_chat, funpay_cold_start_blockers, funpay_input_signature, has_unsupported_funpay_attachment, inventory_cache_freshness_error, is_funpay_system_message, mark_input_received, register_payment, voucher_redemption_block_reason, voucher_reset_block_reason)
+from funpay_orders import (extract_chat_message_fragments, extract_last_chat_message_fragment, extract_last_customer_message_fragment, extract_steam_trade_url, filter_reserved_assets, find_open_order_for_chat, funpay_cold_start_blockers, funpay_input_signature, has_unsupported_funpay_attachment, FunPayLedgerIntegrityError, load_funpay_order_ledger, inventory_cache_freshness_error, is_funpay_system_message, mark_input_received, register_payment, voucher_redemption_block_reason, voucher_reset_block_reason)
 from order_parser import detect_order_sets_and_quantity, is_funpay_refund_notification, is_paid_order_notification
 
 
@@ -1069,3 +1069,40 @@ def test_filter_reserved_assets_hides_reservation_on_cancelled_order_but_not_cle
     assert filtered["games"]["Game"]["Card"] == ["23456"]
     assert filtered["total_cards"] == 1
 
+
+
+def test_load_funpay_order_ledger_initializes_only_when_file_is_missing(tmp_path):
+    path = tmp_path / "funpay_orders.json"
+    assert load_funpay_order_ledger(path) == {"orders": {}}
+
+
+def test_load_funpay_order_ledger_reads_valid_orders_and_refunds(tmp_path):
+    path = tmp_path / "funpay_orders.json"
+    expected = {
+        "orders": {"fp-order-1234": {"status": "reserved"}},
+        "refunds": {},
+    }
+    path.write_text(__import__("json").dumps(expected), encoding="utf-8")
+    assert load_funpay_order_ledger(path) == expected
+
+
+def test_load_funpay_order_ledger_rejects_corrupt_existing_json(tmp_path):
+    path = tmp_path / "funpay_orders.json"
+    path.write_text('{"orders": ', encoding="utf-8")
+    try:
+        load_funpay_order_ledger(path)
+    except FunPayLedgerIntegrityError:
+        pass
+    else:
+        raise AssertionError("corrupt order ledger must never become an empty ledger")
+
+
+def test_load_funpay_order_ledger_rejects_invalid_root_or_orders_container(tmp_path):
+    path = tmp_path / "funpay_orders.json"
+    for payload in ('[]', '{}', '{"orders": []}', '{"orders": {}, "refunds": []}'):
+        path.write_text(payload, encoding="utf-8")
+        try:
+            load_funpay_order_ledger(path)
+        except FunPayLedgerIntegrityError:
+            continue
+        raise AssertionError(f"invalid ledger structure was accepted: {payload}")
