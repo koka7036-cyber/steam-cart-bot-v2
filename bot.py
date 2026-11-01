@@ -768,6 +768,22 @@ from playerok_orders import (
 from playerok_monitor import PlayerokMonitor
 
 
+def notify_funpay_ledger_integrity(admin_id=None, context="операция"):
+    """Tell the administrator that FunPay is frozen because its journal is untrusted."""
+    message = (
+        "🚨 Журнал заказов FunPay повреждён или недоступен. "
+        "Резервирование, обработка заказов и выдача остановлены. "
+        "Файл не очищался и не заменялся пустым. Восстанови его из проверенной резервной копии "
+        "после ручной сверки заказов и Steam-предложений."
+    )
+    logging.critical("FunPay ledger integrity failure during %s; all FunPay order operations remain blocked.", context)
+    if admin_id:
+        try:
+            bot.send_message(admin_id, message)
+        except Exception:
+            logging.exception("Could not notify administrator about FunPay ledger integrity failure.")
+
+
 def load_funpay_orders():
     return load_funpay_order_ledger(FP_ORDERS_FILE)
 
@@ -1550,6 +1566,9 @@ def funpay_check_unread_chats():
             cfg["seen_msgs"] = seen_msgs
             cfg["seen_input_events"] = seen_input_events
             save_json(FP_CONFIG_FILE, cfg)
+    except FunPayLedgerIntegrityError:
+        notify_funpay_ledger_integrity(admin_id, "фоновая проверка чатов")
+        return
     except Exception:
         logging.exception("Ошибка проверки непрочитанных чатов FunPay")
 @bot.callback_query_handler(func=lambda call: bool(call.data) and call.data.startswith("fporderselect:"))
@@ -1636,6 +1655,9 @@ def funpay_background_worker():
     try:
         migrate_funpay_delivery_config()
         recover_interrupted_funpay_deliveries()
+    except FunPayLedgerIntegrityError:
+        db = load_json(DB_FILE, {"admin_id": None, "vouchers": {}})
+        notify_funpay_ledger_integrity(db.get("admin_id"), "восстановление после перезапуска")
     except Exception:
         logging.exception("Не удалось инициализировать безопасный процесс выдачи FunPay")
     last_ping_time = 0
