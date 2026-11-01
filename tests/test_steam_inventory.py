@@ -3,7 +3,9 @@ import pytest
 
 from steam_inventory import (
     SteamInventoryPaginationError,
+    SteamInventoryRateLimitError,
     collect_inventory_pages,
+    parse_retry_after,
 )
 
 
@@ -220,3 +222,32 @@ def test_collect_inventory_pages_rejects_assets_without_class_or_instance_id():
                 "more_items": 0,
             }
         )
+
+
+
+def test_parse_retry_after_delta_seconds():
+    assert parse_retry_after("120") == 120
+    assert parse_retry_after("0") == 0
+    assert parse_retry_after("-5") == 0
+
+
+def test_parse_retry_after_http_date():
+    from datetime import datetime, timezone
+
+    now = datetime(2026, 11, 1, 10, 0, 0, tzinfo=timezone.utc).timestamp()
+    assert parse_retry_after("Sun, 01 Nov 2026 10:02:00 GMT", now=now) == 120
+    assert parse_retry_after("Sun, 01 Nov 2026 09:59:00 GMT", now=now) == 0
+
+
+def test_parse_retry_after_rejects_invalid_or_infinite_values():
+    assert parse_retry_after(None) is None
+    assert parse_retry_after("") is None
+    assert parse_retry_after("not-a-date") is None
+    assert parse_retry_after("inf") is None
+
+
+def test_rate_limit_error_exposes_parsed_retry_after():
+    error = SteamInventoryRateLimitError("HTTP 429", retry_after="45")
+    assert str(error) == "HTTP 429"
+    assert error.retry_after == "45"
+    assert error.retry_after_seconds == 45
