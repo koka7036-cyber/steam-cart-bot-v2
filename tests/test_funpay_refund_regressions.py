@@ -114,34 +114,35 @@ def test_funpay_background_worker_notifies_admin_and_never_rebuilds_corrupt_ledg
 
 
 def test_funpay_admin_commands_catch_ledger_integrity_without_skipping_normal_paths():
+    import ast
     from pathlib import Path
 
     source = (Path(__file__).resolve().parents[1] / "bot.py").read_text(encoding="utf-8-sig")
-    expected = {
-        "def funpay_cold_start_cmd(message):": 'notify_funpay_ledger_integrity(message.chat.id, "/fpcoldstart")',
-        "def funpay_offer_resolve_cmd(message):": 'notify_funpay_ledger_integrity(message.chat.id, "/fpofferresolve")',
-        "def funpay_release_cmd(message):": 'notify_funpay_ledger_integrity(message.chat.id, "/fprelease")',
-        "def show_funpay_dashboard(message):": 'notify_funpay_ledger_integrity(message.chat.id, "панель FunPay")',
+    tree = ast.parse(source)
+    functions = {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
-    for function, notification in expected.items():
-        start = source.index(function)
-        next_handler = source.find("\\n@bot.", start + len(function))
-        block = source[start:next_handler if next_handler >= 0 else len(source)]
+    expected = {
+        "funpay_cold_start_cmd": "/fpcoldstart",
+        "funpay_offer_resolve_cmd": "/fpofferresolve",
+        "funpay_release_cmd": "/fprelease",
+        "show_funpay_dashboard": "панель FunPay",
+    }
+    for name, context in expected.items():
+        node = functions[name]
+        block = ast.get_source_segment(source, node)
         assert "except FunPayLedgerIntegrityError:" in block
-        assert notification in block
+        assert f'notify_funpay_ledger_integrity(message.chat.id, "{context}")' in block
         assert "        return\\n    except" not in block
 
-    cold_start_start = source.index("def funpay_cold_start_cmd")
-    cold_start_end = source.index("\\n@bot.", cold_start_start)
-    cold_start = source[cold_start_start:cold_start_end]
+    cold_start = ast.get_source_segment(source, functions["funpay_cold_start_cmd"])
     assert "funpay_cold_start_blockers(orders)" in cold_start
 
-    offer_start = source.index("def funpay_offer_resolve_cmd")
-    offer_end = source.index("\\n@bot.", offer_start)
-    assert 'record["status"] = "completed"' in source[offer_start:offer_end]
+    offer_resolve = ast.get_source_segment(source, functions["funpay_offer_resolve_cmd"])
+    assert 'record["status"] = "completed"' in offer_resolve
 
-    release_start = source.index("def funpay_release_cmd")
-    release_end = source.index("\\n@bot.", release_start)
-    release = source[release_start:release_end]
+    release = ast.get_source_segment(source, functions["funpay_release_cmd"])
     assert "funpay_release_refund_block_reason(record)" in release
     assert 'record["status"] = "cancelled"' in release
