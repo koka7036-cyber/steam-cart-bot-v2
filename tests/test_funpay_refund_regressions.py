@@ -80,3 +80,32 @@ def test_fprelease_refund_guard_allows_normal_unreffunded_reservation():
 
 def test_fprelease_refund_guard_rejects_invalid_record():
     assert funpay_release_refund_block_reason(None)
+
+
+def test_funpay_ledger_integrity_notifier_is_explicitly_fail_closed():
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "bot.py").read_text(encoding="utf-8-sig")
+    start = source.index("def notify_funpay_ledger_integrity(")
+    end = source.index("\n\ndef load_funpay_orders()", start)
+    notifier = source[start:end]
+
+    assert "повреждён или недоступен" in notifier
+    assert "не заменялся пустым" in notifier
+    assert "резервирование, обработка заказов и выдача остановлены" in notifier
+    assert "bot.send_message(admin_id, message)" in notifier
+    assert "logging.critical(" in notifier
+
+
+def test_funpay_background_worker_notifies_admin_and_never_rebuilds_corrupt_ledger():
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "bot.py").read_text(encoding="utf-8-sig")
+    start = source.index("def funpay_background_worker():")
+    end = source.index("# --- МОДУЛЬ 3:", start)
+    worker = source[start:end]
+
+    assert "except FunPayLedgerIntegrityError:" in worker
+    assert 'notify_funpay_ledger_integrity(db.get("admin_id"), "восстановление после перезапуска")' in worker
+    assert 'load_funpay_orders()' not in worker.split("last_ping_time = 0", 1)[1].split("while True:", 1)[0]
+    assert "load_funpay_order_ledger" not in worker
