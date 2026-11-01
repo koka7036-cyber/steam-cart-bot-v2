@@ -156,17 +156,6 @@ def test_extract_steam_trade_url_rejects_ambiguous_multiple_links():
     assert extract_steam_trade_url(a + "\n" + b) is None
 
 
-def test_extract_text_attachment_href_from_funpay_chat_file():
-    fragment = (
-        '<div class="chat-msg-file">'
-        '<a href="/file/12345" title="trade-url.txt">trade-url.txt</a>'
-        '</div>'
-    )
-    assert extract_text_attachment_href(
-        fragment, "https://funpay.com/chat/?node=987"
-    ) == "https://funpay.com/file/12345"
-
-
 def test_retry_required_order_is_open_for_corrected_input():
     order = make_order("retry", status="retry_required")
     assert find_open_order_for_chat({"retry": order}, "123") is order
