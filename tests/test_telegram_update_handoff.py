@@ -149,6 +149,15 @@ def test_fprelease_checks_refund_guard_before_restoring_stock():
     assert guard < restore
 
 
+def test_bot_funpay_ledger_loader_does_not_fall_back_to_empty_on_corruption():
+    source = read_project_file("bot.py")
+    start = source.index("def load_funpay_orders")
+    end = source.index("def get_funpay_delivery_policy", start)
+    loader = source[start:end]
+    assert "load_funpay_order_ledger(FP_ORDERS_FILE)" in loader
+    assert "load_json(FP_ORDERS_FILE" not in loader
+
+
 def test_funpay_buyer_input_requires_reservation_before_marking_sending():
     source = read_project_file("bot.py")
     start = source.index("def record_funpay_buyer_input")
