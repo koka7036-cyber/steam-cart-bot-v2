@@ -1658,6 +1658,7 @@ def funpay_background_worker():
     except FunPayLedgerIntegrityError:
         db = load_json(DB_FILE, {"admin_id": None, "vouchers": {}})
         notify_funpay_ledger_integrity(db.get("admin_id"), "восстановление после перезапуска")
+        return
     except Exception:
         logging.exception("Не удалось инициализировать безопасный процесс выдачи FunPay")
     last_ping_time = 0
