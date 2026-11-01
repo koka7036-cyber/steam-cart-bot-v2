@@ -755,7 +755,7 @@ def send_funpay_chat_message(node_id, text):
         return False, f"Ошибка отправки: {e}"
 
 from order_parser import detect_order_sets_and_quantity, is_funpay_refund_notification, is_paid_order_notification
-from funpay_orders import (compact_funpay_text, extract_order_number, extract_steam_trade_url, has_unsupported_funpay_attachment, filter_reserved_assets, find_open_order_for_chat, funpay_cold_start_blockers, funpay_input_signature, inventory_cache_freshness_error, mark_input_received, open_orders_for_chat, parse_funpay_history_payload, register_payment, message_signature, restore_reserved_assets, summarize_funpay_chat_diagnostics, voucher_redemption_block_reason, voucher_reset_block_reason)
+from funpay_orders import (compact_funpay_text, extract_order_number, extract_steam_trade_url, has_unsupported_funpay_attachment, filter_reserved_assets, find_open_order_for_chat, funpay_cold_start_blockers, funpay_input_signature, inventory_cache_freshness_error, mark_input_received, open_orders_for_chat, parse_funpay_history_payload, register_payment, message_signature, restore_reserved_assets, summarize_funpay_chat_diagnostics, funpay_release_refund_block_reason, voucher_redemption_block_reason, voucher_reset_block_reason)
 from sales_analytics import summarize_sales
 from playerok_orders import (
     active_orders_for_chat,
@@ -2872,6 +2872,10 @@ def funpay_release_cmd(message):
         record = data["orders"].get(key)
         if not isinstance(record, dict):
             bot.send_message(message.chat.id, "❌ Заказ не найден.")
+            return
+        refund_block_reason = funpay_release_refund_block_reason(record)
+        if refund_block_reason:
+            bot.send_message(message.chat.id, refund_block_reason)
             return
         if record.get("status") in {"sending", "delivery_uncertain", "offer_sent", "offer_pending_confirmation", "completed"} or record.get("steam_trade_offer_id"):
             bot.send_message(
