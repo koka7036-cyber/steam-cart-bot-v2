@@ -1,0 +1,66 @@
+name: Cloud Codex dispatcher preflight
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Validate and inspect the eligible queue without invoking Codex
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  issues: read
+
+concurrency:
+  group: cloud-codex-dispatcher-${{ github.repository }}
+  queue: max
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout main without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Test dispatcher policy and adapter
+        run: |
+          set -euo pipefail
+          python -m unittest discover -s dispatcher/tests -v
+          python -m compileall -q dispatcher
+      - name: Inspect queue in read-only mode
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [[ "$DRY_RUN" != "true" ]]; then
+            echo "::error::Only read-only dry-run is implemented."
+            exit 1
+          fi
+          python -m dispatcher.queue_cli --max-pages 2 --per-page 100 | tee "$RUNNER_TEMP/queue-report.json"
+          {
+            echo "## Cloud Codex dispatcher preflight"
+            echo "- Mode: read-only queue inspection"
+            echo "- Codex invocation: disabled"
+            echo "- GitHub permissions: contents:read, issues:read"
+            echo "- Sales and delivery operations: prohibited"
+            echo "- Automatic PR creation/merge: disabled"
+            echo
+            echo '### Queue result'
+            echo '~~~json'
+            cat "$RUNNER_TEMP/queue-report.json"
+            echo '~~~'
+          } >> "$GITHUB_STEP_SUMMARY"
