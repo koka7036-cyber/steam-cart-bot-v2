@@ -1503,7 +1503,7 @@ def funpay_check_unread_chats():
                 input_error = "В сообщении есть похожая на Steam trade-ссылку строка, но формат ссылки некорректен."
             elif not trade_url and not input_error and has_file:
                 input_error = (
-                    "Вложение не является поддерживаемым способом передачи ссылки. "
+                    "FunPay-вложение не поддерживается. "
                     "Отправь Steam Trade URL обычным текстовым сообщением."
                 )
 
@@ -2652,7 +2652,7 @@ def funpay_chat_diagnostic_cmd(message):
             "Последнее сообщение покупателя: "
             f"{'найдено' if buyer_input.get('message_id') else 'нет нового сообщения'}; "
             f"Steam-ссылка: {'да' if buyer_input.get('has_trade_url') else 'нет'}; "
-            f"текстовое вложение: {'да' if buyer_input.get('supports_trade_url_text_only') else 'нет'}"
+            f"текстовая Steam Trade URL: {'да' if buyer_input.get('has_trade_url') else 'нет'}"
         ),
     ])
 
@@ -2744,7 +2744,7 @@ def funpay_chat_diagnostic_cmd(message):
         blockers.append("последнее событие системное; старую ссылку нельзя использовать повторно")
     elif latest.get("author_kind") != "buyer":
         blockers.append("последнее сообщение не подтверждено как сообщение покупателя")
-        blockers.append("в последнем сообщении покупателя не найдена Steam-ссылка или текстовое вложение")
+        blockers.append("в последнем сообщении покупателя не найдена текстовая Steam Trade URL")
     if not open_orders:
         blockers.append("в журнале нет активного оплаченного заказа для этого чата")
     elif len(open_orders) > 1:
@@ -2994,7 +2994,7 @@ def set_fp_key(message):
         bot.send_message(
             message.chat.id,
             f"✅ **FunPay подключен.** (ID: `{fp_state['user_id']}`)\n"
-            "Автоматизация принимает Steam Trade URL обычным сообщением или небольшим обычным текстовым сообщением, прикреплённым к чату заказа. Внешние ссылки не используются.",
+            "Автоматизация принимает только Steam Trade URL, отправленную обычным текстовым сообщением в чате заказа. Вложения и внешние ссылки не используются.",
             reply_markup=build_admin_keyboard(),
             parse_mode="Markdown"
         )
