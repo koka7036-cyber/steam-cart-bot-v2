@@ -112,6 +112,16 @@ STEAM_TRADE_URL_RE = re.compile(
     r"https?://steamcommunity\.com/tradeoffer/new/\?[^\s<>\"'\\]+",
     re.IGNORECASE,
 )
+def has_unsupported_funpay_attachment(html_fragment: str) -> bool:
+    """Return True for image/file attachment markup; never extract content from it."""
+    fragment = str(html_fragment or "")
+    return bool(re.search(
+        r"""<img\b|chat-msg-(?:file|attachment)|data-type\s*=\s*(["'])attachment\1""",
+        fragment,
+        re.IGNORECASE,
+    ))
+
+
 def extract_steam_trade_url(text: str) -> str | None:
     """Extract exactly one valid Steam Trade URL; reject off-host or ambiguous input."""
     candidates = STEAM_TRADE_URL_RE.findall(html.unescape(text or ""))
