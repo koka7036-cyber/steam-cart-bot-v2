@@ -112,6 +112,10 @@ def _initial_fulfillment(status: str, sets: int | None) -> str:
         return "awaiting_trade_url"
     if status == "sent":
         return "sent"
+    if status == "problem_resolved":
+        # The platform resolved the dispute, but delivery still requires an
+        # administrator to reconcile the prior offer and refund state.
+        return "manual_review"
     return "awaiting_payment"
 
 
