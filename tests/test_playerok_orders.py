@@ -129,6 +129,19 @@ def test_status_normalization_handles_enums_and_unknown_values():
     assert normalize_platform_status("random-new-status") == "unknown"
 
 
+def test_initial_problem_resolved_deal_enters_manual_review():
+    orders = {}
+    record, created, changed = upsert_deal(
+        orders, deal_id="initial-problem-resolved", status="DEAL_PROBLEM_RESOLVED",
+        item_id="item-one", chat_id="chat-initial", sets=1,
+    )
+    assert created is True and changed is True
+    assert record["platform_status"] == "problem_resolved"
+    assert record["fulfillment_status"] == "manual_review"
+    assert should_notify_admin_status_change(record) is True
+    assert active_orders_for_chat(orders, "chat-initial") == []
+
+
 def test_problem_resolved_notifies_admin_but_does_not_change_delivery_state():
     orders = {}
     record, created, changed = upsert_deal(
