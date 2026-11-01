@@ -275,8 +275,8 @@ def test_funpay_watcher_attachment_detection_uses_valid_regex_without_file_downl
 
 
 def test_funpay_diagnostic_separates_non_buyer_from_missing_trade_url():
-    source = read_project_file("funpay_orders.py")
-    start = source.index("def summarize_funpay_chat_diagnostics")
+    source = read_project_file("bot.py")
+    start = source.index("def funpay_chat_diagnostic_cmd")
     diagnostic = source[start:]
     non_buyer = diagnostic.index('elif latest.get("author_kind") != "buyer":')
     missing_url = diagnostic.index('elif not buyer_input.get("has_trade_url"):')
