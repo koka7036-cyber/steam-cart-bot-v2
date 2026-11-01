@@ -1049,6 +1049,15 @@ def test_filter_reserved_assets_quarantines_invalid_reservation_container_or_rec
         assert filtered["total_cards"] == 0
 
 
+def test_filter_reserved_assets_quarantines_delivery_states_without_reservation():
+    cache = {"games": {"Game": {"Card": ["12345", "23456"]}}}
+    for status in ("reserved", "sending", "delivery_uncertain", "offer_sent", "offer_pending_confirmation", "refund_review"):
+        orders = {"order": {"status": status, "reservation": None}}
+        filtered = filter_reserved_assets(cache, orders, {})
+        assert filtered["games"] == {"Game": {"Card": []}}, status
+        assert filtered["total_cards"] == 0
+
+
 def test_filter_reserved_assets_quarantines_duplicate_asset_ids_inside_one_reservation():
     cache = {"games": {"Game": {"Card": ["12345", "23456"]}}}
     orders = {"bad": {"status": "reserved", "reservation": {"asset_ids": ["12345", "12345"]}}}
