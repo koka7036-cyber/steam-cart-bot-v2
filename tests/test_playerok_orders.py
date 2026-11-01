@@ -288,3 +288,53 @@ def test_quantity_conflict_stays_in_manual_review_after_confirmed_event():
     assert record["mapping_conflict"] is True
     assert record["fulfillment_status"] == "needs_review"
     assert active_orders_for_chat(orders, "chat-conflict-2") == []
+
+
+
+def test_playerok_ledger_corrupt_json_is_not_replaced(tmp_path):
+    import pytest
+    from playerok_orders import load_orders
+
+    target = tmp_path / "playerok_orders.json"
+    original = b'{"orders": {"broken": '
+    target.write_bytes(original)
+
+    with pytest.raises(Exception):
+        load_orders(target)
+
+    assert target.read_bytes() == original
+
+
+def test_playerok_ledger_invalid_structure_is_not_replaced(tmp_path):
+    import json
+    import pytest
+    from playerok_orders import load_orders
+
+    target = tmp_path / "playerok_orders.json"
+    original = json.dumps({"orders": []}, ensure_ascii=False).encode("utf-8")
+    target.write_bytes(original)
+
+    with pytest.raises(ValueError, match="Invalid Playerok order ledger structure"):
+        load_orders(target)
+
+    assert target.read_bytes() == original
+
+
+def test_playerok_dashboard_does_not_present_corrupt_ledger_as_empty():
+    import ast
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "bot.py").read_text(encoding="utf-8-sig")
+    tree = ast.parse(source)
+    function = next(
+        node for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "build_playerok_dashboard_text"
+    )
+    block = ast.get_source_segment(source, function)
+
+    assert 'stats = summarize_orders(orders) if not ledger_error else None' in block
+    assert "Журнал недоступен" in block
+    assert "Статистика не рассчитана; файл не перезаписывался." in block
+    assert 'if show_orders and not ledger_error:' in block
+    assert "Последние сделки не показаны: журнал не прочитан." in block
+    assert "if not latest:" not in block
