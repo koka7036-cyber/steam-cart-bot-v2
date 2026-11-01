@@ -139,9 +139,9 @@ class PlayerokMonitor:
             logging.error("Playerok monitor stopped (%s)", type(exc).__name__)
 
     async def _sync_open_deals(self, account: Any) -> tuple[int, str | None]:
-        """Reconcile existing paid/pending seller deals without marketplace writes."""
+        """Reconcile seller deals across all statuses without marketplace writes."""
         try:
-            from PyPlayerokAPI.types.enums import ItemDealDirections, ItemDealStatuses
+            from PyPlayerokAPI.types.enums import ItemDealDirections
         except ImportError:
             return 0, "DealStatusTypesUnavailable"
 
@@ -151,10 +151,10 @@ class PlayerokMonitor:
         try:
             # The SDK limits each page to 24. Cap reconciliation to five pages so
             # a very old account cannot trigger a large scan during bot startup.
-            for _ in range(5):
+            max_pages = 5
+            for page_index in range(max_pages):
                 page = await account.get_deals(
                     count=24,
-                    statuses=[ItemDealStatuses.PAID, ItemDealStatuses.PENDING],
                     direction=ItemDealDirections.OUT,
                     after_cursor=cursor,
                 )
@@ -190,7 +190,9 @@ class PlayerokMonitor:
                     break
                 next_cursor = _get(page_info, "end_cursor", "endCursor")
                 if not next_cursor or next_cursor == cursor:
-                    break
+                    return scanned, "PaginationCursorUnavailable"
+                if page_index + 1 == max_pages:
+                    return scanned, "PageLimitReached"
                 cursor = next_cursor
             return scanned, None
         except Exception as exc:

@@ -762,6 +762,7 @@ from playerok_orders import (
     load_orders as load_playerok_orders,
     mark_trade_url_received,
     save_orders as save_playerok_orders,
+    should_notify_admin_status_change,
     summarize_orders,
     upsert_deal,
 )
@@ -2322,10 +2323,16 @@ def handle_playerok_event(event):
             f"🛒 <b>Новая сделка Playerok</b>\nID: <code>{html.escape(str(deal_id))}</code>\nЛот: {item_name}\nКоличество: {sets_text} сет.\nСтатус: <code>{html.escape(str(record.get('platform_status', 'unknown')))}</code>.\nАвтовыдача выключена.{review}",
             parse_mode="HTML",
         )
-    elif changed and record and record.get("platform_status") in {"sent", "confirmed", "rolled_back", "problem"}:
+    elif changed and record and should_notify_admin_status_change(record):
+        status_note = (
+            "Проблема отмечена решённой на Playerok; сделка остаётся в ручной проверке. "
+            "Автовыдача остаётся выключенной."
+            if record.get("platform_status") == "problem_resolved"
+            else "Автовыдача остаётся выключенной."
+        )
         bot.send_message(
             admin_id,
-            f"🔔 <b>Изменение сделки Playerok</b>\nID: <code>{html.escape(str(record.get('deal_id')))}</code>\nСтатус: <code>{html.escape(str(record.get('platform_status')))}</code>\nАвтовыдача остаётся выключенной.",
+            f"🔔 <b>Изменение сделки Playerok</b>\nID: <code>{html.escape(str(record.get('deal_id')))}</code>\nСтатус: <code>{html.escape(str(record.get('platform_status')))}</code>\n{status_note}",
             parse_mode="HTML",
         )
     if event.get("has_trade_url") and trade_link_result:
