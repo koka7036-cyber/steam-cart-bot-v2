@@ -7,6 +7,7 @@ from collections import defaultdict
 MAIN_MENU = "main"
 TOP_LEVEL_SECTIONS = frozenset({"stock", "funpay", "playerok", "sales", "settings"})
 NESTED_SECTIONS = frozenset({"steam_auth"})
+SECTION_PARENTS = {"steam_auth": frozenset({"settings"})}
 
 
 class AdminNavigation:
@@ -23,18 +24,24 @@ class AdminNavigation:
         if section not in TOP_LEVEL_SECTIONS and section not in NESTED_SECTIONS:
             return self.current(chat_id)
         stack = self._stacks[chat_id]
-        if stack[-1] == section:
+        if section == stack[-1]:
             return section
-        # Re-entering a section should not create repeated copies in history.
+
+        if section in TOP_LEVEL_SECTIONS:
+            # Selecting a top-level section always starts a fresh path.
+            stack[:] = [MAIN_MENU, section]
+            return section
+
+        allowed_parents = SECTION_PARENTS.get(section, frozenset())
+        if stack[-1] not in allowed_parents:
+            return stack[-1]
+
+        # Re-entering an existing nested screen rewinds to that screen rather
+        # than duplicating it in the navigation history.
         if section in stack:
             stack[:] = stack[: stack.index(section) + 1]
-        elif section in NESTED_SECTIONS and stack[-1] in TOP_LEVEL_SECTIONS:
-            stack.append(section)
-        elif section in TOP_LEVEL_SECTIONS:
-            stack[:] = [MAIN_MENU, section]
         else:
-            # A nested screen is only valid from one of its parent sections.
-            return stack[-1]
+            stack.append(section)
         return stack[-1]
 
     def back(self, chat_id: int) -> str:
