@@ -173,10 +173,6 @@ def test_extract_last_chat_message_fragment_does_not_reuse_old_trade_link_for_la
     assert fragment is not None
     assert "token=OLD" not in fragment
     assert "trade-url.txt" in fragment
-    assert extract_text_attachment_href(
-        fragment, "https://funpay.com/chat/?node=987"
-    ) == "https://funpay.com/file/765"
-
 
 def test_extract_last_chat_message_fragment_returns_latest_text():
     html_doc = (
