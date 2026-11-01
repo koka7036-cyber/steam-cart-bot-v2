@@ -54,6 +54,15 @@ class DispatcherPolicyTests(unittest.TestCase):
             )
             self.assertFalse(validate_issue(issue(body=body)).eligible, path)
 
+    def test_rejects_absolute_windows_paths(self):
+        for path in (r"C:\CardBot\start.bat", r"C:\CardBot\data\orders.json", r"C:\CardBot\.env", "C:/CardBot/start.bat"):
+            body = (
+                "Implement a bounded parser test with documentation.\n"
+                "Files to change:\n"
+                f"- {path}"
+            )
+            self.assertFalse(validate_issue(issue(body=body)).eligible, path)
+
     def test_rejects_live_operations(self):
         body = (
             "Implement a change to perform live sale through Steam POST and test it. "
