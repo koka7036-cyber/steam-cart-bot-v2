@@ -17,6 +17,7 @@ import rsa
 import telebot
 from telebot import types, apihelper
 from runtime_paths import resolve_runtime_paths
+from admin_navigation import AdminNavigation, cancel_password_prompt
 from steam_inventory import (
     SteamInventoryPaginationError,
     SteamInventoryRateLimitError,
@@ -755,30 +756,42 @@ def send_funpay_chat_message(node_id, text):
         return False, f"Ошибка отправки: {e}"
 
 from order_parser import detect_order_sets_and_quantity, is_funpay_refund_notification, is_paid_order_notification
-from funpay_orders import (compact_funpay_text, decode_text_attachment, download_text_attachment, extract_order_number, extract_steam_trade_url, extract_text_attachment_href, filter_reserved_assets, find_open_order_for_chat, funpay_cold_start_blockers, funpay_input_signature, inventory_cache_freshness_error, mark_input_received, open_orders_for_chat, parse_funpay_history_payload, register_payment, message_signature, restore_reserved_assets, summarize_funpay_chat_diagnostics, voucher_redemption_block_reason, voucher_reset_block_reason)
+from funpay_orders import (compact_funpay_text, FunPayLedgerIntegrityError, load_funpay_order_ledger, extract_order_number, extract_steam_trade_url, has_unsupported_funpay_attachment, filter_reserved_assets, find_open_order_for_chat, funpay_cold_start_blockers, funpay_input_signature, inventory_cache_freshness_error, mark_input_received, open_orders_for_chat, parse_funpay_history_payload, register_payment, message_signature, restore_reserved_assets, summarize_funpay_chat_diagnostics, funpay_release_refund_block_reason, voucher_redemption_block_reason, voucher_reset_block_reason)
 from sales_analytics import summarize_sales
 from playerok_orders import (
     active_orders_for_chat,
     load_orders as load_playerok_orders,
     mark_trade_url_received,
     save_orders as save_playerok_orders,
+    should_notify_admin_status_change,
     summarize_orders,
     upsert_deal,
 )
 from playerok_monitor import PlayerokMonitor
 
 
+def notify_funpay_ledger_integrity(admin_id=None, context="операция"):
+    """Tell the administrator that FunPay is frozen because its journal is untrusted."""
+    message = (
+        "🚨 Журнал заказов FunPay повреждён или недоступен. "
+        "Резервирование, обработка заказов и выдача остановлены. "
+        "Файл не очищался и не заменялся пустым. Восстанови его из проверенной резервной копии "
+        "после ручной сверки заказов и Steam-предложений."
+    )
+    logging.critical("FunPay ledger integrity failure during %s; all FunPay order operations remain blocked.", context)
+    if admin_id:
+        try:
+            bot.send_message(admin_id, message)
+        except Exception:
+            logging.exception("Could not notify administrator about FunPay ledger integrity failure.")
+
+
 def load_funpay_orders():
-    data = load_json(FP_ORDERS_FILE, {"orders": {}})
-    if not isinstance(data, dict):
-        data = {"orders": {}}
-    if not isinstance(data.get("orders"), dict):
-        data["orders"] = {}
-    return data
+    return load_funpay_order_ledger(FP_ORDERS_FILE)
 
 
 def get_funpay_delivery_policy():
-    """Use a Steam trade URL in chat text or one validated FunPay-hosted text attachment."""
+    """Use only a Steam trade URL sent as ordinary chat message text."""
     cfg = load_json(FP_CONFIG_FILE, {})
     return {
         "input_mode": "chat_only",
@@ -1126,7 +1139,6 @@ def record_funpay_buyer_input(node_id, trade_url, input_kind, selected_order_key
         return record, record["status"], result_message
 
 
-MAX_FUNPAY_TEXT_ATTACHMENT_BYTES = 64 * 1024
 
 
 def apply_reserved_assets_to_cache(cache_data, orders=None, vouchers=None):
@@ -1455,26 +1467,14 @@ def funpay_check_unread_chats():
                         f"Покупатель: {sender_name}\n"
                         f"Лот: {event_sets} сет. × {event_quantity} шт.\n"
                         f"Резерв: {record.get('status')}.\n"
-                        "Ожидается trade-ссылка или текстовый файл с одной Steam trade-ссылкой."
+                        "Ожидается только текстовая Steam Trade URL в сообщении покупателя."
                     )
 
-            chat_page_url = f"https://funpay.com/chat/?node={node_id}"
-            attachment_href = (
-                extract_text_attachment_href(last_message_html, chat_page_url)
-                if last_message_html else None
-            )
-            has_file = bool(
-                attachment_href
-                or (
-                    last_message_html and re.search(
-                        r"(?:chat-msg-(?:file|attachment)|data-type=['\"]attachment['\"])",
-                        last_message_html, re.IGNORECASE
-                    )
-                )
-                or re.search(r"\b(?:файл|вложение|attachment)\b", msg_preview, re.IGNORECASE)
+            has_file = has_unsupported_funpay_attachment(last_message_html) or bool(
+                re.search(r"\b(?:файл|вложение|attachment)\b", msg_preview, re.IGNORECASE)
             )
 
-            if not latest_buyer_message or (not full_text.strip() and not attachment_href and not has_file):
+            if not latest_buyer_message or (not full_text.strip() and not has_file):
                 # A latest system alert is not buyer input. Cancel any stale in-memory
                 # order-selection prompt for this chat; an older URL must not survive a refund.
                 for token, pending in list(pending_funpay_input_selections.items()):
@@ -1509,37 +1509,12 @@ def funpay_check_unread_chats():
             input_kind = "chat_trade_url"
             input_error = None
 
-            # FunPay file-exchange supports a small text file. Only download one
-            # unambiguous FunPay-hosted attachment; never accept external redirects.
-            if not trade_url and attachment_href:
-                try:
-                    attachment_text = download_text_attachment(
-                        s, attachment_href, max_bytes=MAX_FUNPAY_TEXT_ATTACHMENT_BYTES
-                    )
-                    trade_url = extract_steam_trade_url(attachment_text)
-                    if trade_url:
-                        input_kind = "text_attachment"
-                    else:
-                        input_error = (
-                            "В текстовом файле должна быть ровно одна корректная Steam trade-ссылка "
-                            "с параметрами partner и token."
-                        )
-                except (ValueError, requests.RequestException) as exc:
-                    input_error = f"Не удалось безопасно прочитать текстовый файл: {str(exc)[:180]}"
-                except Exception as exc:
-                    logging.warning(
-                        "FunPay text attachment failed for chat %s: %s",
-                        node_id,
-                        type(exc).__name__,
-                    )
-                    input_error = "Не удалось безопасно прочитать текстовый файл. Отправь ссылку обычным сообщением."
-
             if not trade_url and not input_error and contains_trade_url:
                 input_error = "В сообщении есть похожая на Steam trade-ссылку строка, но формат ссылки некорректен."
             elif not trade_url and not input_error and has_file:
                 input_error = (
-                    "Вложение не распознано как текстовый файл FunPay. "
-                    "Прикрепи небольшой .txt/.csv/.log с одной Steam trade-ссылкой."
+                    "FunPay-вложение не поддерживается. "
+                    "Отправь Steam Trade URL обычным текстовым сообщением."
                 )
 
             if trade_url:
@@ -1593,6 +1568,9 @@ def funpay_check_unread_chats():
             cfg["seen_msgs"] = seen_msgs
             cfg["seen_input_events"] = seen_input_events
             save_json(FP_CONFIG_FILE, cfg)
+    except FunPayLedgerIntegrityError:
+        notify_funpay_ledger_integrity(admin_id, "фоновая проверка чатов")
+        return
     except Exception:
         logging.exception("Ошибка проверки непрочитанных чатов FunPay")
 @bot.callback_query_handler(func=lambda call: bool(call.data) and call.data.startswith("fporderselect:"))
@@ -1679,6 +1657,10 @@ def funpay_background_worker():
     try:
         migrate_funpay_delivery_config()
         recover_interrupted_funpay_deliveries()
+    except FunPayLedgerIntegrityError:
+        db = load_json(DB_FILE, {"admin_id": None, "vouchers": {}})
+        notify_funpay_ledger_integrity(db.get("admin_id"), "восстановление после перезапуска")
+        return
     except Exception:
         logging.exception("Не удалось инициализировать безопасный процесс выдачи FunPay")
     last_ping_time = 0
@@ -1822,14 +1804,18 @@ def update_inventory_cache():
             timeout=20,
         )
         if response.status_code == 429:
-            raise SteamInventoryRateLimitError("HTTP 429")
+            retry_after = response.headers.get("Retry-After") if hasattr(response, "headers") else None
+            raise SteamInventoryRateLimitError("HTTP 429", retry_after=retry_after)
         response.raise_for_status()
         return response.json()
 
     try:
         assets, descriptions = collect_inventory_pages(fetch_inventory_page)
-    except SteamInventoryRateLimitError:
-        return None, "Steam вернул ошибку 429. Подожди 2 минуты."
+    except SteamInventoryRateLimitError as e:
+        retry_after = e.retry_after_seconds
+        if retry_after is None:
+            return None, "Steam вернул HTTP 429. Подожди перед повторной проверкой; время Retry-After не указано."
+        return None, f"Steam вернул HTTP 429. Повтори проверку не раньше чем через {retry_after} сек."
     except SteamInventoryPaginationError as e:
         return None, str(e)
     except Exception as e:
@@ -2199,7 +2185,7 @@ def build_playerok_dashboard_text(show_orders=False):
         ledger_error = True
     else:
         ledger_error = False
-    stats = summarize_orders(orders)
+    stats = summarize_orders(orders) if not ledger_error else None
     state_labels = {
         "not_configured": "Не настроен",
         "stopped": "Остановлен",
@@ -2234,22 +2220,30 @@ def build_playerok_dashboard_text(show_orders=False):
     lines.append(f"Лот на 5 сетов: {'✅ ID задан' if state.get('five_set_mapping_ready') else '⚠️ ID не задан'}")
     if state.get("one_set_mapping_ready") and state.get("five_set_mapping_ready") and not state.get("mappings_distinct"):
         lines.append("🚨 <b>Оба лота имеют одинаковый ID. Заказы будут требовать ручной проверки.</b>")
+    if ledger_error:
+        lines.extend([
+            "",
+            "<b>Сделки в локальном журнале</b>",
+            "🚨 <b>Журнал недоступен.</b> Статистика не рассчитана; файл не перезаписывался.",
+            "Восстановление возможно только после проверки резервной копии и сверки сделок.",
+        ])
+    else:
+        lines.extend([
+            "",
+            "<b>Сделки в локальном журнале</b>",
+            f"Всего: <b>{stats['total']}</b> | Оплачено, ожидает данных: <b>{stats['paid']}</b>",
+            f"Ожидают трейд-ссылку: <b>{stats['awaiting_trade_url']}</b>",
+            f"Трейд-ссылка замечена: <b>{stats['trade_url_received']}</b>",
+            f"Отправлено по статусу площадки: <b>{stats['sent']}</b> | Подтверждено: <b>{stats['confirmed']}</b>",
+            f"Проблемы: <b>{stats['problem']}</b> | Возвраты: <b>{stats['rolled_back']}</b>",
+            f"Ручная проверка: <b>{stats['needs_review']}</b>",
+        ])
     lines.extend([
-        "",
-        "<b>Сделки в локальном журнале</b>",
-        f"Всего: <b>{stats['total']}</b> | Оплачено, ожидает данных: <b>{stats['paid']}</b>",
-        f"Ожидают трейд-ссылку: <b>{stats['awaiting_trade_url']}</b>",
-        f"Трейд-ссылка замечена: <b>{stats['trade_url_received']}</b>",
-        f"Отправлено по статусу площадки: <b>{stats['sent']}</b> | Подтверждено: <b>{stats['confirmed']}</b>",
-        f"Проблемы: <b>{stats['problem']}</b> | Возвраты: <b>{stats['rolled_back']}</b>",
-        f"Ручная проверка: <b>{stats['needs_review']}</b>",
         "",
         "🚦 Автовыдача и изменение статусов Playerok: <b>ВЫКЛЮЧЕНЫ</b>",
         "ℹ️ Журнал не сохраняет сами трейд-ссылки или текст сообщений.",
     ])
-    if ledger_error:
-        lines.append("⚠️ Не удалось прочитать журнал. Файл не перезаписывался.")
-    if show_orders:
+    if show_orders and not ledger_error:
         latest = sorted(orders.values(), key=lambda item: item.get("updated_at") or 0, reverse=True)[:8]
         lines.extend(["", "<b>Последние сделки</b>"])
         for record in latest:
@@ -2259,8 +2253,8 @@ def build_playerok_dashboard_text(show_orders=False):
             fulfillment = html.escape(str(record.get("fulfillment_status") or "unknown"))
             sets = record.get("sets")
             lines.append(f"• <code>{deal_id}</code> — {sets if sets in (1, 5) else '?'} сет. — {status}/{fulfillment} — {item_name}")
-        if not latest:
-            lines.append("Пока сделок нет.")
+    elif show_orders:
+        lines.extend(["", "🚨 <b>Последние сделки не показаны: журнал не прочитан.</b>"])
     return "\n".join(lines)
 
 
@@ -2322,10 +2316,16 @@ def handle_playerok_event(event):
             f"🛒 <b>Новая сделка Playerok</b>\nID: <code>{html.escape(str(deal_id))}</code>\nЛот: {item_name}\nКоличество: {sets_text} сет.\nСтатус: <code>{html.escape(str(record.get('platform_status', 'unknown')))}</code>.\nАвтовыдача выключена.{review}",
             parse_mode="HTML",
         )
-    elif changed and record and record.get("platform_status") in {"sent", "confirmed", "rolled_back", "problem"}:
+    elif changed and record and should_notify_admin_status_change(record):
+        status_note = (
+            "Проблема отмечена решённой на Playerok; сделка остаётся в ручной проверке. "
+            "Автовыдача остаётся выключенной."
+            if record.get("platform_status") == "problem_resolved"
+            else "Автовыдача остаётся выключенной."
+        )
         bot.send_message(
             admin_id,
-            f"🔔 <b>Изменение сделки Playerok</b>\nID: <code>{html.escape(str(record.get('deal_id')))}</code>\nСтатус: <code>{html.escape(str(record.get('platform_status')))}</code>\nАвтовыдача остаётся выключенной.",
+            f"🔔 <b>Изменение сделки Playerok</b>\nID: <code>{html.escape(str(record.get('deal_id')))}</code>\nСтатус: <code>{html.escape(str(record.get('platform_status')))}</code>\n{status_note}",
             parse_mode="HTML",
         )
     if event.get("has_trade_url") and trade_link_result:
@@ -2382,7 +2382,7 @@ def start_playerok_monitor():
 
 ADMIN_MAIN_MENU = "🏠 Главное меню"
 ADMIN_BACK_MENU = "⬅️ Назад"
-admin_menu_state = {}
+admin_navigation = AdminNavigation()
 pending_steam_password_admin = set()
 restart_requested = False
 update_restart_requested = False
@@ -2390,7 +2390,7 @@ update_restart_requested = False
 def build_admin_keyboard():
     db = load_json(DB_FILE, {"admin_id": None, "vouchers": {}})
     admin_id = db.get("admin_id")
-    section = admin_menu_state.get(admin_id, "main")
+    section = admin_navigation.current(admin_id) if admin_id is not None else "main"
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
 
     if section == "stock":
@@ -2427,6 +2427,14 @@ def build_admin_keyboard():
         markup.add("🔵 Playerok", "📈 Продажи и аналитика")
         markup.add("⚙️ Настройки")
     return markup
+
+def build_steam_auth_keyboard():
+    """Build the nested Steam authorization keyboard without changing navigation state."""
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    markup.add("🔑 Войти в Steam", "📡 Статус Steam")
+    markup.add(ADMIN_BACK_MENU, ADMIN_MAIN_MENU)
+    return markup
+
 
 def build_customer_keyboard():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
@@ -2508,64 +2516,64 @@ def funpay_cold_start_cmd(message):
         return
 
     parts = (message.text or "").strip().split(maxsplit=1)
-    with funpay_orders_lock:
-        data = load_funpay_orders()
-        orders = data.get("orders", {})
-        if len(parts) < 2 or parts[1].strip().upper() != "CONFIRM":
-            counts = {}
-            for item in orders.values():
-                if isinstance(item, dict):
-                    status = str(item.get("status", "unknown"))
-                    counts[status] = counts.get(status, 0) + 1
-            summary = ", ".join(f"{status}: {count}" for status, count in sorted(counts.items())) or "нет записей"
-            bot.send_message(
-                message.chat.id,
-                "🧹 <b>Подготовка к чистому старту FunPay</b>\n"
-                f"Записей в журнале: {len(orders)}\nСтатусы: {html.escape(summary)}\n\n"
-                "Команда удалит только журнал заказов FunPay после создания резервной копии. "
-                "Склад, кэш карточек, коды, настройки и Playerok не изменятся.\n"
-                "Если заказов действительно нет и ты хочешь продолжить, отправь: "
-                "<code>/fpcoldstart CONFIRM</code>",
-                parse_mode="HTML",
-            )
-            return
+    try:
+        with funpay_orders_lock:
+            data = load_funpay_orders()
+    except FunPayLedgerIntegrityError:
+        notify_funpay_ledger_integrity(message.chat.id, "/fpcoldstart")
+        return
+    orders = data.get("orders", {})
+    if len(parts) < 2 or parts[1].strip().upper() != "CONFIRM":
+        counts = {}
+        for item in orders.values():
+            if isinstance(item, dict):
+                status = str(item.get("status", "unknown"))
+                counts[status] = counts.get(status, 0) + 1
+        summary = ", ".join(f"{status}: {count}" for status, count in sorted(counts.items())) or "нет записей"
+        bot.send_message(
+            message.chat.id,
+            "🧹 <b>Подготовка к чистому старту FunPay</b>\n"
+            f"Записей в журнале: {len(orders)}\nСтатусы: {html.escape(summary)}\n\n"
+            "Команда удалит только журнал заказов FunPay после создания резервной копии. "
+            "Склад, кэш карточек, коды, настройки и Playerok не изменятся.\n"
+            "Если заказов действительно нет и ты хочешь продолжить, отправь: "
+            "<code>/fpcoldstart CONFIRM</code>",
+            parse_mode="HTML",
+        )
+        return
 
-        blockers = funpay_cold_start_blockers(orders)
-        if blockers:
-            preview = ", ".join(
-                f"{key} ({status})" for key, status in blockers[:5]
-            )
-            more = f" и ещё {len(blockers) - 5}" if len(blockers) > 5 else ""
-            bot.send_message(
-                message.chat.id,
-                "❌ Журнал FunPay не очищен: есть незавершённые заказы или активные резервы. "
-                "Очистка потеряла бы защиту от повторной продажи тех же карточек.\n"
-                f"Заказы: {html.escape(preview + more)}\n"
-                "Сначала завершите заказ или выполните /fprelease только если Steam-предложение точно не создавалось. "
-                "Для отправленного/неопределённого предложения сначала проверьте Steam и используйте "
-                "/fpofferresolve КЛЮЧ accepted|returned.\n"
-                "После завершения всех заказов команда /fpcoldstart CONFIRM снова станет доступна."
-            )
-            return
+    blockers = funpay_cold_start_blockers(orders)
+    if blockers:
+        preview = ", ".join(f"{key} ({status})" for key, status in blockers[:5])
+        more = f" и ещё {len(blockers) - 5}" if len(blockers) > 5 else ""
+        bot.send_message(
+            message.chat.id,
+            "❌ Журнал FunPay не очищен: есть незавершённые заказы или активные резервы. "
+            "Очистка потеряла бы защиту от повторной продажи тех же карточек.\n"
+            f"Заказы: {html.escape(preview + more)}\n"
+            "Сначала завершите заказ или выполните /fprelease только если Steam-предложение точно не создавалось. "
+            "Для отправленного/неопределённого предложения сначала проверьте Steam и используйте "
+            "/fpofferresolve КЛЮЧ accepted|returned.\n"
+            "После завершения всех заказов команда /fpcoldstart CONFIRM снова станет доступна."
+        )
+        return
 
-        if not orders:
-            bot.send_message(message.chat.id, "Журнал FunPay уже пуст. Склад и остальные данные не менялись.")
-            return
+    if not orders:
+        bot.send_message(message.chat.id, "Журнал FunPay уже пуст. Склад и остальные данные не менялись.")
+        return
 
-        import shutil
-        from datetime import datetime
-        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_path = f"{FP_ORDERS_FILE}.backup_{stamp}.json"
-        shutil.copy2(FP_ORDERS_FILE, backup_path)
-        save_json(FP_ORDERS_FILE, {"orders": {}})
-        logging.warning("Admin requested FunPay cold start; archived %s orders to %s", len(orders), backup_path)
+    import shutil
+    from datetime import datetime
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_path = f"{FP_ORDERS_FILE}.backup_{stamp}.json"
+    shutil.copy2(FP_ORDERS_FILE, backup_path)
+    save_json(FP_ORDERS_FILE, {"orders": {}})
+    logging.warning("Admin requested FunPay cold start; archived %s orders to %s", len(orders), backup_path)
 
     bot.send_message(
         message.chat.id,
-        "✅ Журнал заказов FunPay очищен. Резервная копия сохранена: "
-        f"<code>{html.escape(backup_path)}</code>\n"
-        "Кэш склада, карточки, коды, настройки и данные Playerok не затронуты.",
-        parse_mode="HTML",
+        f"✅ Чистый старт FunPay выполнен. Резервная копия: {os.path.basename(backup_path)}. "
+        "Склад, кэш, коды и настройки не изменялись."
     )
 
 
@@ -2666,7 +2674,11 @@ def funpay_chat_diagnostic_cmd(message):
         )
         return
 
-    orders_data = load_funpay_orders()
+    try:
+        orders_data = load_funpay_orders()
+    except FunPayLedgerIntegrityError:
+        notify_funpay_ledger_integrity(message.chat.id, "/fpdiag")
+        return
     orders = orders_data.get("orders", {})
     summary = summarize_funpay_chat_diagnostics(timeline, orders, node_id)
     policy = get_funpay_delivery_policy()
@@ -2686,8 +2698,7 @@ def funpay_chat_diagnostic_cmd(message):
         (
             "Последнее сообщение покупателя: "
             f"{'найдено' if buyer_input.get('message_id') else 'нет нового сообщения'}; "
-            f"Steam-ссылка: {'да' if buyer_input.get('has_trade_url') else 'нет'}; "
-            f"текстовое вложение: {'да' if buyer_input.get('has_text_attachment') else 'нет'}"
+            f"текстовая Steam Trade URL: {'да' if buyer_input.get('has_trade_url') else 'нет'}"
         ),
     ])
 
@@ -2779,8 +2790,8 @@ def funpay_chat_diagnostic_cmd(message):
         blockers.append("последнее событие системное; старую ссылку нельзя использовать повторно")
     elif latest.get("author_kind") != "buyer":
         blockers.append("последнее сообщение не подтверждено как сообщение покупателя")
-    elif not buyer_input.get("has_trade_url") and not buyer_input.get("has_text_attachment"):
-        blockers.append("в последнем сообщении покупателя не найдена Steam-ссылка или текстовое вложение")
+    elif not buyer_input.get("has_trade_url"):
+        blockers.append("в последнем сообщении покупателя не найдена текстовая Steam Trade URL")
     if not open_orders:
         blockers.append("в журнале нет активного оплаченного заказа для этого чата")
     elif len(open_orders) > 1:
@@ -2813,8 +2824,12 @@ def funpay_orders_cmd(message):
     db = load_json(DB_FILE, {"admin_id": None, "vouchers": {}})
     if message.chat.id != db.get("admin_id"):
         return
-    with funpay_orders_lock:
-        orders = list(load_funpay_orders()["orders"].values())
+    try:
+        with funpay_orders_lock:
+            orders = list(load_funpay_orders()["orders"].values())
+    except FunPayLedgerIntegrityError:
+        notify_funpay_ledger_integrity(message.chat.id, "funpay_orders_cmd(")
+        return
     if not orders:
         bot.send_message(message.chat.id, "📋 Журнал FunPay пока пуст.")
         return
@@ -2846,49 +2861,55 @@ def funpay_offer_resolve_cmd(message):
         return
 
     key, resolution = parts[1], parts[2].lower()
-    with funpay_orders_lock:
-        data = load_funpay_orders()
-        record = data["orders"].get(key)
-        if not isinstance(record, dict):
-            bot.send_message(message.chat.id, "❌ Заказ не найден.")
-            return
-        if record.get("status") not in {
-            "offer_sent", "offer_pending_confirmation", "delivery_uncertain", "sending"
-        }:
-            bot.send_message(message.chat.id, "❌ У заказа нет предложения, которое нужно сверить.")
-            return
-        if resolution == "accepted":
-            record["reservation"] = None
-            record["status"] = "completed"
-            record["resolved_at"] = int(time.time())
-            record.setdefault("notes", []).append(
-                "Администратор подтвердил принятие предложения в Steam."
-            )
-            result_text = "✅ Заказ отмечен завершённым. Карточки обратно в склад не возвращались."
-        else:
-            reservation = record.get("reservation")
-            if not isinstance(reservation, dict) or not reservation.get("asset_locations"):
-                bot.send_message(
-                    message.chat.id,
-                    "❌ У заказа нет полного резерва. Автоматическое восстановление невозможно; нужна ручная сверка склада."
+    try:
+        with funpay_orders_lock:
+            data = load_funpay_orders()
+            record = data["orders"].get(key)
+            if not isinstance(record, dict):
+                bot.send_message(message.chat.id, "❌ Заказ не найден.")
+                return
+            if record.get("status") not in {
+                "offer_sent", "offer_pending_confirmation", "delivery_uncertain", "sending"
+            }:
+                bot.send_message(message.chat.id, "❌ У заказа нет предложения, которое нужно сверить.")
+                return
+            if resolution == "accepted":
+                record["reservation"] = None
+                record["status"] = "completed"
+                record["resolved_at"] = int(time.time())
+                record.setdefault("notes", []).append(
+                    "Администратор подтвердил принятие предложения в Steam."
                 )
-                return
-            restored = restore_reservation_to_cache(reservation)
-            if not restored:
-                bot.send_message(message.chat.id, "❌ Не удалось восстановить резерв; данные заказа не изменены.")
-                return
-            record["reservation"] = None
-            record.pop("steam_trade_offer_id", None)
-            record["steam_offer_confirmed"] = False
-            record["status"] = "retry_required"
-            record["resolved_at"] = int(time.time())
-            record.setdefault("notes", []).append(
-                "Администратор подтвердил, что предложение отменено/отклонено/истекло и карточки вернулись в инвентарь."
-            )
-            result_text = "✅ Резерв восстановлен. Заказ ждёт новую trade-ссылку/текстовый файл."
-        record["updated_at"] = int(time.time())
-        save_json(FP_ORDERS_FILE, data)
+                result_text = "✅ Заказ отмечен завершённым. Карточки обратно в склад не возвращались."
+            else:
+                reservation = record.get("reservation")
+                if not isinstance(reservation, dict) or not reservation.get("asset_locations"):
+                    bot.send_message(
+                        message.chat.id,
+                        "❌ У заказа нет полного резерва. Автоматическое восстановление невозможно; нужна ручная сверка склада."
+                    )
+                    return
+                restored = restore_reservation_to_cache(reservation)
+                if not restored:
+                    bot.send_message(message.chat.id, "❌ Не удалось восстановить резерв; данные заказа не изменены.")
+                    return
+                record["reservation"] = None
+                record.pop("steam_trade_offer_id", None)
+                record["steam_offer_confirmed"] = False
+                record["status"] = "retry_required"
+                record["resolved_at"] = int(time.time())
+                record.setdefault("notes", []).append(
+                    "Администратор подтвердил, что предложение отменено/отклонено/истекло и карточки вернулись в инвентарь."
+                )
+                result_text = "✅ Резерв восстановлен. Заказ ждёт новую текстовую Steam Trade URL."
+            record["updated_at"] = int(time.time())
+            save_json(FP_ORDERS_FILE, data)
+    except FunPayLedgerIntegrityError:
+        notify_funpay_ledger_integrity(message.chat.id, "/fpofferresolve")
+        return
     bot.send_message(message.chat.id, result_text)
+
+
 
 
 @bot.message_handler(commands=["fprelease"])
@@ -2902,51 +2923,61 @@ def funpay_release_cmd(message):
         bot.send_message(message.chat.id, "Использование: `/fprelease КЛЮЧ_ИЗ_fporders`", parse_mode="Markdown")
         return
     key = parts[1].strip()
-    with funpay_orders_lock:
-        data = load_funpay_orders()
-        record = data["orders"].get(key)
-        if not isinstance(record, dict):
-            bot.send_message(message.chat.id, "❌ Заказ не найден.")
-            return
-        if record.get("status") in {"sending", "delivery_uncertain", "offer_sent", "offer_pending_confirmation", "completed"} or record.get("steam_trade_offer_id"):
-            bot.send_message(
-                message.chat.id,
-                "❌ У заказа есть или могло быть создано предложение Steam. Используй /fpofferresolve КЛЮЧ accepted|returned после проверки истории Steam."
-            )
-            return
-        if record.get("status") == "retry_required" and not record.get("reservation"):
-            bot.send_message(message.chat.id, "❌ Резерва уже нет; заказ ожидает новые данные, а не снятие резерва.")
-            return
-        if record.get("status") == "delivered":
-            bot.send_message(message.chat.id, "❌ Нельзя снять резерв с уже выданного заказа.")
-            return
-        reservation = record.get("reservation")
-        if reservation:
-            restored = restore_reservation_to_cache(reservation)
-            if not restored:
-                # Never erase the only reservation journal when stock restoration fails.
+    try:
+        with funpay_orders_lock:
+            data = load_funpay_orders()
+            record = data["orders"].get(key)
+            if not isinstance(record, dict):
+                bot.send_message(message.chat.id, "❌ Заказ не найден.")
+                return
+            refund_block_reason = funpay_release_refund_block_reason(record)
+            if refund_block_reason:
+                bot.send_message(message.chat.id, refund_block_reason)
+                return
+            if record.get("status") in {"sending", "delivery_uncertain", "offer_sent", "offer_pending_confirmation", "completed"} or record.get("steam_trade_offer_id"):
                 bot.send_message(
                     message.chat.id,
-                    "❌ Резерв не снят: запись неполная или склад не удалось восстановить. "
-                    "Заказ и резерв сохранены для ручной проверки."
+                    "❌ У заказа есть или могло быть создано предложение Steam. Используй /fpofferresolve КЛЮЧ accepted|returned после проверки истории Steam."
                 )
                 return
-        else:
-            restored = False
+            if record.get("status") == "retry_required" and not record.get("reservation"):
+                bot.send_message(message.chat.id, "❌ Резерва уже нет; заказ ожидает новые данные, а не снятие резерва.")
+                return
+            if record.get("status") == "delivered":
+                bot.send_message(message.chat.id, "❌ Нельзя снять резерв с уже выданного заказа.")
+                return
+            reservation = record.get("reservation")
+            if reservation:
+                restored = restore_reservation_to_cache(reservation)
+                if not restored:
+                    bot.send_message(
+                        message.chat.id,
+                        "❌ Резерв не снят: запись неполная или склад не удалось восстановить. "
+                        "Заказ и резерв сохранены для ручной проверки."
+                    )
+                    return
+            else:
+                restored = False
 
-        record["reservation"] = None
-        record["status"] = "cancelled"
-        record["updated_at"] = int(time.time())
-        record.setdefault("notes", []).append(
-            "Резерв снят администратором через /fprelease."
-            if restored else "Заказ отменён администратором; активного резерва не было."
-        )
-        save_json(FP_ORDERS_FILE, data)
+            record["reservation"] = None
+            record["status"] = "cancelled"
+            record["updated_at"] = int(time.time())
+            record.setdefault("notes", []).append(
+                "Резерв снят администратором через /fprelease."
+                if restored else "Заказ отменён администратором; активного резерва не было."
+            )
+            save_json(FP_ORDERS_FILE, data)
+    except FunPayLedgerIntegrityError:
+        notify_funpay_ledger_integrity(message.chat.id, "/fprelease")
+        return
     bot.send_message(
         message.chat.id,
         "✅ Резерв снят и карточки возвращены на склад."
         if restored else "✅ Заказ помечен отменённым; активного резерва не было."
     )
+
+
+
 
 @bot.message_handler(func=lambda m: m.text == "🔗 Где взять трейд-ссылку?")
 def customer_help_tradeurl(message):
@@ -3017,7 +3048,7 @@ def set_fp_key(message):
     config = load_json(FP_CONFIG_FILE, {})
     config["golden_key"] = key
     config["last_raise_ts"] = 0
-    # Accept one Steam trade URL from chat text or a small FunPay-hosted text attachment.
+    # Accept only one Steam trade URL from ordinary chat message text.
     # External file hosting is never accepted.
     config["delivery_input_mode"] = "chat_only"
     config["allow_chat_trade_url"] = True
@@ -3030,7 +3061,7 @@ def set_fp_key(message):
         bot.send_message(
             message.chat.id,
             f"✅ **FunPay подключен.** (ID: `{fp_state['user_id']}`)\n"
-            "Автоматизация принимает Steam Trade URL обычным сообщением или небольшим текстовым файлом, прикреплённым к чату заказа. Внешние ссылки не используются.",
+            "Автоматизация принимает только Steam Trade URL, отправленную обычным текстовым сообщением в чате заказа. Вложения и внешние ссылки не используются.",
             reply_markup=build_admin_keyboard(),
             parse_mode="Markdown"
         )
@@ -3058,7 +3089,7 @@ def build_funpay_dashboard_text():
     completed = counts.get("completed", 0)
     cancelled = counts.get("cancelled", 0)
     mode = policy.get("input_mode", "both")
-    mode_label = {"file": "📎 Текстовый файл", "chat": "💬 Чат", "both": "💬 Чат + 📎 текстовый файл", "chat_only": "💬 Чат + 📎 текстовый файл"}.get(mode, mode)
+    mode_label = {"chat_only": "💬 Только текстовая trade-ссылка"}.get(mode, mode)
 
     return (
         "📊 <b>ПАНЕЛЬ FUNPAY</b>\n"
@@ -3077,7 +3108,7 @@ def build_funpay_dashboard_text():
         f"🚫 Отменены: <b>{cancelled}</b>\n"
         "━━━━━━━━━━━━━━━━━━\n"
         f"📨 Приём ссылки: <b>{html.escape(mode_label)}</b>\n"
-        f"🚦 Автовыдача по чату/текстовому файлу: <b>{'ВКЛЮЧЕНА' if policy.get('auto_delivery') else 'ВЫКЛЮЧЕНА'}</b>\n"
+        f"🚦 Автовыдача по текстовой trade-ссылке: <b>{'ВКЛЮЧЕНА' if policy.get('auto_delivery') else 'ВЫКЛЮЧЕНА'}</b>\n"
         "🔒 Проверка домена, формата файла, уникальности заказа и дублей: <b>АКТИВНА</b>\n"
         + (f"⚠️ Последняя ошибка: <code>{html.escape(str(fp_state.get('error'))[:250])}</code>\n" if fp_state.get("error") else "")
         + "\n<i>Это информационная панель. Открытие не запускает выдачу и не меняет настройки.</i>"
@@ -3123,12 +3154,19 @@ def show_funpay_dashboard(message):
     db = load_json(DB_FILE, {"admin_id": None, "vouchers": {}})
     if message.chat.id != db.get("admin_id"):
         return
+    try:
+        dashboard_text = build_funpay_dashboard_text()
+    except FunPayLedgerIntegrityError:
+        notify_funpay_ledger_integrity(message.chat.id, "панель FunPay")
+        return
     bot.send_message(
         message.chat.id,
-        build_funpay_dashboard_text(),
+        dashboard_text,
         reply_markup=build_funpay_dashboard_markup(),
         parse_mode="HTML",
     )
+
+
 
 
 @bot.callback_query_handler(func=lambda call: call.data in {"fpdash_refresh", "fpdash_orders", "fpdiag_help"})
@@ -3152,8 +3190,13 @@ def funpay_dashboard_callback(call):
         )
         return
     if call.data == "fpdash_orders":
-        with funpay_orders_lock:
-            orders = list(load_funpay_orders()["orders"].values())
+        try:
+            with funpay_orders_lock:
+                orders = list(load_funpay_orders()["orders"].values())
+        except FunPayLedgerIntegrityError:
+            notify_funpay_ledger_integrity(call.message.chat.id, "кнопка последних заказов FunPay")
+            bot.answer_callback_query(call.id, "Журнал FunPay недоступен; выдача остановлена.", show_alert=True)
+            return
         orders.sort(key=lambda item: item.get("updated_at", 0), reverse=True)
         lines = ["📋 <b>ПОСЛЕДНИЕ ЗАКАЗЫ FUNPAY</b>"]
         for item in orders[:10]:
@@ -3341,9 +3384,11 @@ def handle_all_messages(message):
     # Admin-only Steam login flow. Passwords are never intentionally persisted or logged.
     if message.chat.id == db.get("admin_id") and message.from_user and message.from_user.id == db.get("admin_id") and message.chat.type == "private":
         if message.chat.id in pending_steam_password_admin:
-            if text == "/cancel":
+            cancel_destination = cancel_password_prompt(admin_navigation, message.chat.id, text)
+            if cancel_destination is not None:
                 pending_steam_password_admin.discard(message.chat.id)
-                bot.send_message(message.chat.id, "Авторизация отменена.", reply_markup=build_admin_keyboard())
+                keyboard = build_steam_auth_keyboard() if cancel_destination == "steam_auth" else build_admin_keyboard()
+                bot.send_message(message.chat.id, "Авторизация отменена.", reply_markup=keyboard)
                 return
             pending_steam_password_admin.discard(message.chat.id)
             try:
@@ -3368,16 +3413,15 @@ def handle_all_messages(message):
         if text == "🔐 Авторизация Steam":
             sess = load_json(SESSION_FILE, {})
             valid = bool(sess.get("steamLoginSecure") and time.time() - sess.get("timestamp", 0) < 43200)
-            markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-            markup.add("🔑 Войти в Steam", "📡 Статус Steam")
-            markup.add("⬅️ Назад")
+            admin_navigation.open(message.chat.id, "steam_auth")
+            markup = build_steam_auth_keyboard()
             bot.send_message(message.chat.id, "🔐 <b>Авторизация Steam</b>\nСессия: " + ("действует по локальному таймеру" if valid else "нет действующей локальной сессии") + "\nПароль запрашивается только по команде входа. Не отправляй пароль в группы; бот попробует удалить сообщение сразу после получения. Удаление не гарантировано.", reply_markup=markup, parse_mode="HTML")
             return
         if text == "📡 Статус Steam":
             sess = load_json(SESSION_FILE, {})
             valid = bool(sess.get("steamLoginSecure") and time.time() - sess.get("timestamp", 0) < 43200)
             asf_ok, _ = asf_command("status")
-            bot.send_message(message.chat.id, "Steam-сессия: " + ("по таймеру активна" if valid else "отсутствует или устарела") + "\nЛогин задан: " + ("да" if STEAM_LOGIN else "нет") + "\nASF: " + ("доступен" if asf_ok else "не отвечает/не запущен"), reply_markup=build_admin_keyboard())
+            bot.send_message(message.chat.id, "Steam-сессия: " + ("по таймеру активна" if valid else "отсутствует или устарела") + "\nЛогин задан: " + ("да" if STEAM_LOGIN else "нет") + "\nASF: " + ("доступен" if asf_ok else "не отвечает/не запущен"), reply_markup=build_steam_auth_keyboard())
             return
         if text == "🔑 Войти в Steam":
             pending_steam_password_admin.add(message.chat.id)
@@ -3396,12 +3440,13 @@ def handle_all_messages(message):
             "⚙️ Настройки": "settings",
         }
         if text in section_buttons:
-            admin_menu_state[message.chat.id] = section_buttons[text]
+            admin_navigation.open(message.chat.id, section_buttons[text])
             bot.send_message(message.chat.id, "Выбери действие в разделе:", reply_markup=build_admin_keyboard())
             return
         if text in {ADMIN_BACK_MENU, ADMIN_MAIN_MENU}:
-            admin_menu_state[message.chat.id] = "main"
-            bot.send_message(message.chat.id, "Главное меню:", reply_markup=build_admin_keyboard())
+            section = admin_navigation.reset(message.chat.id) if text == ADMIN_MAIN_MENU else admin_navigation.back(message.chat.id)
+            title = "Главное меню:" if section == "main" else "Вернулись в раздел. Выбери действие:"
+            bot.send_message(message.chat.id, title, reply_markup=build_admin_keyboard())
             return
         if text == "📋 Последние заказы FunPay":
             funpay_orders_cmd(message)
