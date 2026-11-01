@@ -266,12 +266,18 @@ def test_funpay_chat_diagnostic_is_admin_only_and_read_only():
 
 def test_funpay_watcher_attachment_detection_uses_valid_regex_without_file_download():
     source = read_project_file("bot.py")
+    helpers = read_project_file("funpay_orders.py")
     start = source.index("def funpay_check_unread_chats")
     end = source.index("def handle_funpay_order_selection", start)
     watcher = source[start:end]
-    assert 'r"""(?:chat-msg-(?:file|attachment)|data-type=["\']attachment["\'])"""' in watcher
-    assert 're.search(r"\\b(?:файл|вложение|attachment)\\b"' in watcher
+    assert "has_unsupported_funpay_attachment(last_message_html)" in watcher
     assert "download_text_attachment(" not in watcher
+    helper_start = helpers.index("def has_unsupported_funpay_attachment")
+    helper_end = helpers.index("def extract_steam_trade_url", helper_start)
+    helper = helpers[helper_start:helper_end]
+    assert "<img" in helper
+    assert "chat-msg-(?:file|attachment)" in helper
+    assert "data-type" in helper
 
 
 def test_funpay_diagnostic_separates_non_buyer_from_missing_trade_url():
