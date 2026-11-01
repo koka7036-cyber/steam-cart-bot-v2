@@ -1118,3 +1118,34 @@ def test_load_funpay_order_ledger_rejects_directory_at_ledger_path(tmp_path):
         pass
     else:
         raise AssertionError("a directory must not be treated as a missing ledger")
+
+
+def test_restore_reserved_assets_quarantines_conflicting_asset_location():
+    from funpay_orders import restore_reserved_assets
+
+    cache = {"games": {"Game": {"Card A": ["10", "11"], "Card B": ["12"]}}, "total_cards": 3}
+    reservation = {
+        "asset_ids": ["11"],
+        "asset_locations": [{"game": "Game", "card": "Card B", "asset_id": "11"}],
+    }
+
+    # A reservation cannot be restored into a different card while the same
+    # Steam asset ID is already present elsewhere in the cached inventory.
+    assert restore_reserved_assets(cache, reservation) is None
+    assert cache["games"]["Game"]["Card A"] == ["10", "11"]
+
+
+def test_restore_reserved_assets_rejects_duplicate_id_already_cached_in_same_location():
+    from funpay_orders import restore_reserved_assets
+
+    cache = {"games": {"Game": {"Card A": ["10", "11"]}}, "total_cards": 2}
+    reservation = {
+        "asset_ids": ["11"],
+        "asset_locations": [{"game": "Game", "card": "Card A", "asset_id": "11"}],
+    }
+
+    restored = restore_reserved_assets(cache, reservation)
+    assert restored is not None
+    assert restored["games"]["Game"]["Card A"] == ["10", "11"]
+    assert restored["total_cards"] == 2
+
