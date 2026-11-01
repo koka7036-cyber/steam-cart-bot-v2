@@ -26,11 +26,15 @@ class FunPayLedgerIntegrityError(RuntimeError):
 
 def load_funpay_order_ledger(path) -> dict:
     """Read the FunPay order ledger without silently replacing corruption with an empty map."""
-    if not os.path.exists(path):
-        return {"orders": {}}
     try:
         with open(path, "r", encoding="utf-8") as ledger_file:
             data = json.load(ledger_file)
+    except FileNotFoundError as exc:
+        if os.path.lexists(path):
+            raise FunPayLedgerIntegrityError(
+                "Путь к журналу заказов FunPay существует, но файл недоступен; выдача заблокирована."
+            ) from exc
+        return {"orders": {}}
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise FunPayLedgerIntegrityError(
             "Журнал заказов FunPay не читается; резервирование и выдача заблокированы."
