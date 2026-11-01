@@ -21,7 +21,7 @@ concurrency:
 
 jobs:
   codex:
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/fix/cloud-codex-untracked-patch-export-20261101'
     runs-on: macos-latest
     timeout-minutes: 20
     steps:
@@ -112,16 +112,45 @@ jobs:
           printf '%s\n' "$TASK" >> "$RUNNER_TEMP/task-prompt.txt"
           CODEX_API_KEY="$CODEX_API_KEY" codex exec --ephemeral --sandbox workspace-write - < "$RUNNER_TEMP/task-prompt.txt"
 
-      - name: Export proposed patch
+      - name: Export complete proposed patch
         if: always()
         run: |
           set -euo pipefail
-          git diff --binary > "$RUNNER_TEMP/proposed.patch"
-          if [[ -s "$RUNNER_TEMP/proposed.patch" ]]; then
-            cp "$RUNNER_TEMP/proposed.patch" proposed.patch
+          patch_file="$RUNNER_TEMP/proposed.patch"
+          validation_dir="$(mktemp -d "$RUNNER_TEMP/codex-patch-check.XXXXXX")"
+          trap 'rm -rf "$validation_dir"' EXIT
+          : > "$patch_file"
+
+          # Export tracked modifications, staged changes, and deletions without changing the index.
+          git diff --binary --no-ext-diff --no-textconv HEAD -- >> "$patch_file"
+
+          # Include only non-ignored untracked files. NUL-delimited paths safely
+          # handle spaces and shell metacharacters; unsupported file types fail closed.
+          while IFS= read -r -d '' path; do
+            if [[ -L "$path" || ! -f "$path" ]]; then
+              echo "Unsupported untracked path type: $path" >&2
+              exit 1
+            fi
+            set +e
+            git diff --no-index --binary --no-ext-diff --no-textconv -- /dev/null "$path" >> "$patch_file"
+            diff_status=$?
+            set -e
+            if [[ "$diff_status" -gt 1 ]]; then
+              echo "Could not export untracked file: $path" >&2
+              exit "$diff_status"
+            fi
+          done < <(git ls-files --others --exclude-standard -z)
+
+          if [[ ! -s "$patch_file" ]]; then
+            printf 'No changes produced.\n' > "$patch_file"
           else
-            printf 'No changes produced.\n' > proposed.patch
+            # Validate against a clean HEAD snapshot outside the worktree.
+            git archive HEAD | tar -x -C "$validation_dir"
+            git -C "$validation_dir" apply --check --binary "$patch_file"
+            git -C "$validation_dir" apply --binary "$patch_file"
           fi
+
+          cp "$patch_file" proposed.patch
 
       - name: Upload proposed patch for human review
         if: always()
