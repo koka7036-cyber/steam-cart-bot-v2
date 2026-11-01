@@ -2492,8 +2492,12 @@ def funpay_cold_start_cmd(message):
         return
 
     parts = (message.text or "").strip().split(maxsplit=1)
-    with funpay_orders_lock:
-        data = load_funpay_orders()
+    try:
+        with funpay_orders_lock:
+            data = load_funpay_orders()
+    except FunPayLedgerIntegrityError:
+        notify_funpay_ledger_integrity(message.chat.id, "funpay_cold_start_cmd(")
+        return
         orders = data.get("orders", {})
         if len(parts) < 2 or parts[1].strip().upper() != "CONFIRM":
             counts = {}
@@ -2796,8 +2800,12 @@ def funpay_orders_cmd(message):
     db = load_json(DB_FILE, {"admin_id": None, "vouchers": {}})
     if message.chat.id != db.get("admin_id"):
         return
-    with funpay_orders_lock:
-        orders = list(load_funpay_orders()["orders"].values())
+    try:
+        with funpay_orders_lock:
+            orders = list(load_funpay_orders()["orders"].values())
+    except FunPayLedgerIntegrityError:
+        notify_funpay_ledger_integrity(message.chat.id, "funpay_orders_cmd(")
+        return
     if not orders:
         bot.send_message(message.chat.id, "📋 Журнал FunPay пока пуст.")
         return
@@ -2829,8 +2837,12 @@ def funpay_offer_resolve_cmd(message):
         return
 
     key, resolution = parts[1], parts[2].lower()
-    with funpay_orders_lock:
-        data = load_funpay_orders()
+    try:
+        with funpay_orders_lock:
+            data = load_funpay_orders()
+    except FunPayLedgerIntegrityError:
+        notify_funpay_ledger_integrity(message.chat.id, "funpay_offer_resolve_cmd(")
+        return
         record = data["orders"].get(key)
         if not isinstance(record, dict):
             bot.send_message(message.chat.id, "❌ Заказ не найден.")
@@ -2885,8 +2897,12 @@ def funpay_release_cmd(message):
         bot.send_message(message.chat.id, "Использование: `/fprelease КЛЮЧ_ИЗ_fporders`", parse_mode="Markdown")
         return
     key = parts[1].strip()
-    with funpay_orders_lock:
-        data = load_funpay_orders()
+    try:
+        with funpay_orders_lock:
+            data = load_funpay_orders()
+    except FunPayLedgerIntegrityError:
+        notify_funpay_ledger_integrity(message.chat.id, "funpay_release_cmd(")
+        return
         record = data["orders"].get(key)
         if not isinstance(record, dict):
             bot.send_message(message.chat.id, "❌ Заказ не найден.")
@@ -3110,9 +3126,13 @@ def show_funpay_dashboard(message):
     db = load_json(DB_FILE, {"admin_id": None, "vouchers": {}})
     if message.chat.id != db.get("admin_id"):
         return
-    bot.send_message(
-        message.chat.id,
-        build_funpay_dashboard_text(),
+    try:
+        bot.send_message(
+            message.chat.id,
+            build_funpay_dashboard_text(),
+    except FunPayLedgerIntegrityError:
+        notify_funpay_ledger_integrity(message.chat.id, "show_funpay_dashboard(")
+        return
         reply_markup=build_funpay_dashboard_markup(),
         parse_mode="HTML",
     )
