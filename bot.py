@@ -1514,7 +1514,10 @@ def funpay_check_unread_chats():
             if not trade_url and attachment_href:
                 try:
                     attachment_text = download_text_attachment(
-                        s, attachment_href, max_bytes=MAX_FUNPAY_TEXT_ATTACHMENT_BYTES
+                        s,
+                        attachment_href,
+                        max_bytes=MAX_FUNPAY_TEXT_ATTACHMENT_BYTES,
+                        referer_url=chat_page_url,
                     )
                     trade_url = extract_steam_trade_url(attachment_text)
                     if trade_url:
