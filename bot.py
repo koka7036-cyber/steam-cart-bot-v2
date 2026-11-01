@@ -1454,7 +1454,7 @@ def funpay_check_unread_chats():
                         f"Покупатель: {sender_name}\n"
                         f"Лот: {event_sets} сет. × {event_quantity} шт.\n"
                         f"Резерв: {record.get('status')}.\n"
-                        "Ожидается только Steam Trade URL обычным текстовым сообщением в чате."
+                        "Ожидается только текстовая Steam Trade URL в сообщении покупателя."
                     )
 
             has_file = bool(
@@ -2652,7 +2652,7 @@ def funpay_chat_diagnostic_cmd(message):
             "Последнее сообщение покупателя: "
             f"{'найдено' if buyer_input.get('message_id') else 'нет нового сообщения'}; "
             f"Steam-ссылка: {'да' if buyer_input.get('has_trade_url') else 'нет'}; "
-            f"текстовое вложение: {'да' if buyer_input.get('attachment_metadata_ignored') else 'нет'}"
+            f"текстовое вложение: {'да' if buyer_input.get('supports_trade_url_text_only') else 'нет'}"
         ),
     ])
 
