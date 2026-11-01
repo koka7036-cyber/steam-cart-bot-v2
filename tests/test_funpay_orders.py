@@ -707,9 +707,11 @@ def test_download_text_attachment_accepts_funpay_text_and_preserves_trade_url():
             self.closed = True
 
     class Session:
-        def get(self, request_url, timeout, stream):
+        def get(self, request_url, timeout, stream, headers):
             assert request_url == "https://funpay.com/file/12345"
             assert timeout == 10 and stream is True
+            assert headers["Accept"] == "text/plain, text/*;q=0.9, */*;q=0.1"
+            assert "Referer" not in headers
             return Response()
 
     text = download_text_attachment(Session(), "https://funpay.com/file/12345")
