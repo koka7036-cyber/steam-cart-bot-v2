@@ -2183,7 +2183,7 @@ def build_playerok_dashboard_text(show_orders=False):
         ledger_error = True
     else:
         ledger_error = False
-    stats = summarize_orders(orders)
+    stats = summarize_orders(orders) if not ledger_error else None
     state_labels = {
         "not_configured": "Не настроен",
         "stopped": "Остановлен",
@@ -2218,22 +2218,30 @@ def build_playerok_dashboard_text(show_orders=False):
     lines.append(f"Лот на 5 сетов: {'✅ ID задан' if state.get('five_set_mapping_ready') else '⚠️ ID не задан'}")
     if state.get("one_set_mapping_ready") and state.get("five_set_mapping_ready") and not state.get("mappings_distinct"):
         lines.append("🚨 <b>Оба лота имеют одинаковый ID. Заказы будут требовать ручной проверки.</b>")
+    if ledger_error:
+        lines.extend([
+            "",
+            "<b>Сделки в локальном журнале</b>",
+            "🚨 <b>Журнал недоступен.</b> Статистика не рассчитана; файл не перезаписывался.",
+            "Восстановление возможно только после проверки резервной копии и сверки сделок.",
+        ])
+    else:
+        lines.extend([
+            "",
+            "<b>Сделки в локальном журнале</b>",
+            f"Всего: <b>{stats['total']}</b> | Оплачено, ожидает данных: <b>{stats['paid']}</b>",
+            f"Ожидают трейд-ссылку: <b>{stats['awaiting_trade_url']}</b>",
+            f"Трейд-ссылка замечена: <b>{stats['trade_url_received']}</b>",
+            f"Отправлено по статусу площадки: <b>{stats['sent']}</b> | Подтверждено: <b>{stats['confirmed']}</b>",
+            f"Проблемы: <b>{stats['problem']}</b> | Возвраты: <b>{stats['rolled_back']}</b>",
+            f"Ручная проверка: <b>{stats['needs_review']}</b>",
+        ])
     lines.extend([
-        "",
-        "<b>Сделки в локальном журнале</b>",
-        f"Всего: <b>{stats['total']}</b> | Оплачено, ожидает данных: <b>{stats['paid']}</b>",
-        f"Ожидают трейд-ссылку: <b>{stats['awaiting_trade_url']}</b>",
-        f"Трейд-ссылка замечена: <b>{stats['trade_url_received']}</b>",
-        f"Отправлено по статусу площадки: <b>{stats['sent']}</b> | Подтверждено: <b>{stats['confirmed']}</b>",
-        f"Проблемы: <b>{stats['problem']}</b> | Возвраты: <b>{stats['rolled_back']}</b>",
-        f"Ручная проверка: <b>{stats['needs_review']}</b>",
         "",
         "🚦 Автовыдача и изменение статусов Playerok: <b>ВЫКЛЮЧЕНЫ</b>",
         "ℹ️ Журнал не сохраняет сами трейд-ссылки или текст сообщений.",
     ])
-    if ledger_error:
-        lines.append("⚠️ Не удалось прочитать журнал. Файл не перезаписывался.")
-    if show_orders:
+    if show_orders and not ledger_error:
         latest = sorted(orders.values(), key=lambda item: item.get("updated_at") or 0, reverse=True)[:8]
         lines.extend(["", "<b>Последние сделки</b>"])
         for record in latest:
@@ -2243,8 +2251,8 @@ def build_playerok_dashboard_text(show_orders=False):
             fulfillment = html.escape(str(record.get("fulfillment_status") or "unknown"))
             sets = record.get("sets")
             lines.append(f"• <code>{deal_id}</code> — {sets if sets in (1, 5) else '?'} сет. — {status}/{fulfillment} — {item_name}")
-        if not latest:
-            lines.append("Пока сделок нет.")
+    elif show_orders:
+        lines.extend(["", "🚨 <b>Последние сделки не показаны: журнал не прочитан.</b>"])
     return "\n".join(lines)
 
 
