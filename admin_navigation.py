@@ -56,3 +56,17 @@ class AdminNavigation:
 
     def clear(self, chat_id: int) -> None:
         self._stacks.pop(chat_id, None)
+
+def cancel_password_prompt(navigation: AdminNavigation, chat_id: int, command: str) -> str | None:
+    """Cancel a pending password prompt and return the destination menu.
+
+    /cancel leaves the user on the current screen; Back and Main Menu navigate.
+    Returns None for ordinary text, which may then be treated as the password.
+    """
+    if command == "/cancel":
+        return navigation.current(chat_id)
+    if command == "⬅️ Назад":
+        return navigation.back(chat_id)
+    if command == "🏠 Главное меню":
+        return navigation.reset(chat_id)
+    return None
