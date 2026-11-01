@@ -2650,7 +2650,11 @@ def funpay_chat_diagnostic_cmd(message):
         )
         return
 
-    orders_data = load_funpay_orders()
+    try:
+        orders_data = load_funpay_orders()
+    except FunPayLedgerIntegrityError:
+        notify_funpay_ledger_integrity(message.chat.id, "/fpdiag")
+        return
     orders = orders_data.get("orders", {})
     summary = summarize_funpay_chat_diagnostics(timeline, orders, node_id)
     policy = get_funpay_delivery_policy()
@@ -3162,8 +3166,13 @@ def funpay_dashboard_callback(call):
         )
         return
     if call.data == "fpdash_orders":
-        with funpay_orders_lock:
-            orders = list(load_funpay_orders()["orders"].values())
+        try:
+            with funpay_orders_lock:
+                orders = list(load_funpay_orders()["orders"].values())
+        except FunPayLedgerIntegrityError:
+            notify_funpay_ledger_integrity(call.message.chat.id, "кнопка последних заказов FunPay")
+            bot.answer_callback_query(call.id, "Журнал FunPay недоступен; выдача остановлена.", show_alert=True)
+            return
         orders.sort(key=lambda item: item.get("updated_at", 0), reverse=True)
         lines = ["📋 <b>ПОСЛЕДНИЕ ЗАКАЗЫ FUNPAY</b>"]
         for item in orders[:10]:
