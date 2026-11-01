@@ -778,7 +778,7 @@ def load_funpay_orders():
 
 
 def get_funpay_delivery_policy():
-    """Use a Steam trade URL in chat text or one validated FunPay-hosted text attachment."""
+    """Use only a Steam trade URL sent as ordinary chat message text."""
     cfg = load_json(FP_CONFIG_FILE, {})
     return {
         "input_mode": "chat_only",
@@ -2849,7 +2849,7 @@ def funpay_offer_resolve_cmd(message):
             record.setdefault("notes", []).append(
                 "Администратор подтвердил, что предложение отменено/отклонено/истекло и карточки вернулись в инвентарь."
             )
-            result_text = "✅ Резерв восстановлен. Заказ ждёт новую trade-ссылку/текстовый файл."
+            result_text = "✅ Резерв восстановлен. Заказ ждёт новую текстовую Steam Trade URL."
         record["updated_at"] = int(time.time())
         save_json(FP_ORDERS_FILE, data)
     bot.send_message(message.chat.id, result_text)
@@ -2981,7 +2981,7 @@ def set_fp_key(message):
     config = load_json(FP_CONFIG_FILE, {})
     config["golden_key"] = key
     config["last_raise_ts"] = 0
-    # Accept one Steam trade URL from chat text or a small FunPay-hosted text attachment.
+    # Accept only one Steam trade URL from ordinary chat message text.
     # External file hosting is never accepted.
     config["delivery_input_mode"] = "chat_only"
     config["allow_chat_trade_url"] = True
@@ -3022,7 +3022,7 @@ def build_funpay_dashboard_text():
     completed = counts.get("completed", 0)
     cancelled = counts.get("cancelled", 0)
     mode = policy.get("input_mode", "both")
-    mode_label = {"file": "📎 Текстовый файл", "chat": "💬 Чат", "both": "💬 Чат + 📎 текстовый файл", "chat_only": "💬 Только текстовая trade-ссылка"}.get(mode, mode)
+    mode_label = {"chat_only": "💬 Только текстовая trade-ссылка"}.get(mode, mode)
 
     return (
         "📊 <b>ПАНЕЛЬ FUNPAY</b>\n"
@@ -3041,7 +3041,7 @@ def build_funpay_dashboard_text():
         f"🚫 Отменены: <b>{cancelled}</b>\n"
         "━━━━━━━━━━━━━━━━━━\n"
         f"📨 Приём ссылки: <b>{html.escape(mode_label)}</b>\n"
-        f"🚦 Автовыдача по чату/текстовому файлу: <b>{'ВКЛЮЧЕНА' if policy.get('auto_delivery') else 'ВЫКЛЮЧЕНА'}</b>\n"
+        f"🚦 Автовыдача по текстовой trade-ссылке: <b>{'ВКЛЮЧЕНА' if policy.get('auto_delivery') else 'ВЫКЛЮЧЕНА'}</b>\n"
         "🔒 Проверка домена, формата файла, уникальности заказа и дублей: <b>АКТИВНА</b>\n"
         + (f"⚠️ Последняя ошибка: <code>{html.escape(str(fp_state.get('error'))[:250])}</code>\n" if fp_state.get("error") else "")
         + "\n<i>Это информационная панель. Открытие не запускает выдачу и не меняет настройки.</i>"
