@@ -110,16 +110,23 @@ def test_funpay_watcher_uses_trusted_history_and_bounds_telegram_notice():
     assert 'message_id=latest_buyer_message.get("id")' in watcher
     assert "extract_paid_order_events(" not in watcher
     assert "extract_last_customer_message_fragment(" not in watcher
-    assert "if not latest_buyer_message or (not full_text.strip() and not attachment_href and not has_file):" in watcher
+    assert "if not latest_buyer_message or (not full_text.strip() and not has_file):" in watcher
     assert "compact_funpay_text(safe_text, max_chars=900)" in watcher
-    assert "download_text_attachment(" in watcher
-    assert 'input_kind = "text_attachment"' in watcher
+    assert "download_text_attachment(" not in watcher
+    assert 'input_kind = "text_attachment"' not in watcher
     assert "seen_input_events[node_id] = input_signature" in watcher
     assert "is_funpay_refund_notification(payment_text)" in watcher
 
 
 
-def test_funpay_order_flow_supports_text_attachments_refunds_and_exact_admin_selection():
+def test_inventory_rate_limit_message_uses_server_retry_after():
+    source = read_project_file("bot.py")
+    assert 'response.headers.get("Retry-After")' in source
+    assert 'retry_after_seconds' in source
+    assert "не раньше чем через" in source
+
+
+def test_funpay_order_flow_supports_text_only_trade_urls_refunds_and_exact_admin_selection():
     source = read_project_file("bot.py")
     assert "def register_funpay_refund(" in source
     assert "restore_reservation_to_cache(reservation)" in source
@@ -127,7 +134,62 @@ def test_funpay_order_flow_supports_text_attachments_refunds_and_exact_admin_sel
     assert "selected_order_key=selected_order_key" in source
     assert 'call.data.startswith("fporderselect:")' in source
     assert "pending_funpay_input_selections" in source
-    assert "Вложение не распознано как текстовый файл FunPay" in source
+    assert "FunPay-вложение не поддерживается" in source
+    assert "Ожидается только текстовая Steam Trade URL" in source
+    assert "download_text_attachment(" not in source
+    assert "input_kind = \"text_attachment\"" not in source
+
+
+def test_fprelease_checks_refund_guard_before_restoring_stock():
+    source = read_project_file("bot.py")
+    start = source.index('@bot.message_handler(commands=["fprelease"])')
+    function = source[start:]
+    guard = function.index("funpay_release_refund_block_reason(record)")
+    restore = function.index("restore_reservation_to_cache(reservation)")
+    assert guard < restore
+
+
+def test_bot_funpay_ledger_loader_does_not_fall_back_to_empty_on_corruption():
+    source = read_project_file("bot.py")
+    start = source.index("def load_funpay_orders")
+    end = source.index("def get_funpay_delivery_policy", start)
+    loader = source[start:end]
+    assert "load_funpay_order_ledger(FP_ORDERS_FILE)" in loader
+    assert "load_json(FP_ORDERS_FILE" not in loader
+
+
+def test_funpay_buyer_input_requires_reservation_before_marking_sending():
+    source = read_project_file("bot.py")
+    start = source.index("def record_funpay_buyer_input")
+    end = source.index("def ", start + 4)
+    function = source[start:end]
+    reserve_guard = function.index("if not record.get(\"reservation\"):")
+    no_stock_return = function.index('return record, "no_stock", reserve_message')
+    sending_transition = function.index('record["status"] = "sending"')
+    steam_call = function.index("send_trade_offer(")
+    assert reserve_guard < no_stock_return < sending_transition < steam_call
+    assert "not record.get(\"reservation\")" in function
+
+
+def test_funpay_payment_reservation_retry_is_limited_to_unreserved_awaiting_input():
+    source = read_project_file("bot.py")
+    start = source.index("def register_funpay_payment")
+    end = source.index("def register_funpay_refund", start)
+    function = source[start:end]
+    assert 'record.get("status") == "awaiting_input" and not record.get("reservation")' in function
+    assert "delivery_uncertain" not in function
+    assert "refund_review" not in function
+
+
+def test_funpay_stock_reservation_is_journaled_before_cache_mutation():
+    source = read_project_file("bot.py")
+    start = source.index("def reserve_funpay_order")
+    end = source.index("def register_funpay_payment", start)
+    function = source[start:end]
+    journal_write = function.index("save_json(FP_ORDERS_FILE, ledger_data)")
+    cache_write = function.index("save_json(CACHE_FILE, updated_cache)")
+    assert journal_write < cache_write
+    assert "if record.get(\"reservation\"):" in function
 
 
 def test_telegram_polling_uses_supported_sync_timeout_arguments():
@@ -220,7 +282,35 @@ def test_funpay_chat_diagnostic_is_admin_only_and_read_only():
     assert 'callback_data="fpdiag_help"' in source
 
 
-def test_funpay_dashboard_explains_text_attachment_input_mode():
+def test_funpay_watcher_attachment_detection_uses_valid_regex_without_file_download():
     source = read_project_file("bot.py")
-    assert '"chat_only": "💬 Чат + 📎 текстовый файл"' in source
-    assert "небольшим текстовым файлом" in source
+    helpers = read_project_file("funpay_orders.py")
+    start = source.index("def funpay_check_unread_chats")
+    end = source.index("def handle_funpay_order_selection", start)
+    watcher = source[start:end]
+    assert "has_unsupported_funpay_attachment(last_message_html)" in watcher
+    assert "download_text_attachment(" not in watcher
+    helper_start = helpers.index("def has_unsupported_funpay_attachment")
+    helper_end = helpers.index("def extract_steam_trade_url", helper_start)
+    helper = helpers[helper_start:helper_end]
+    assert "<img" in helper
+    assert "chat-msg-(?:file|attachment)" in helper
+    assert "data-type" in helper
+
+
+def test_funpay_diagnostic_separates_non_buyer_from_missing_trade_url():
+    source = read_project_file("bot.py")
+    start = source.index("def funpay_chat_diagnostic_cmd")
+    diagnostic = source[start:]
+    non_buyer = diagnostic.index('elif latest.get("author_kind") != "buyer":')
+    missing_url = diagnostic.index('elif not buyer_input.get("has_trade_url"):')
+    assert non_buyer < missing_url
+    non_buyer_branch = diagnostic[non_buyer:missing_url]
+    assert "последнее сообщение не подтверждено" in non_buyer_branch
+    assert "не найдена текстовая Steam Trade URL" not in non_buyer_branch
+
+
+def test_funpay_dashboard_explains_text_only_input_mode():
+    source = read_project_file("bot.py")
+    assert '"chat_only": "💬 Только текстовая trade-ссылка"' in source
+    assert "текстовую Steam Trade URL" in source

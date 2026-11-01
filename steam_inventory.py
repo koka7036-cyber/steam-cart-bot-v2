@@ -10,6 +10,42 @@ class SteamInventoryPaginationError(RuntimeError):
 class SteamInventoryRateLimitError(RuntimeError):
     """Raised when Steam asks the client to slow down."""
 
+    def __init__(self, message: str = "HTTP 429", retry_after: str | None = None):
+        super().__init__(message)
+        self.retry_after = retry_after
+        self.retry_after_seconds = parse_retry_after(retry_after)
+
+
+def parse_retry_after(value: str | None, now: float | None = None) -> int | None:
+    """Parse Retry-After delta-seconds or HTTP-date; never return a negative wait."""
+    import math
+    from datetime import datetime, timezone
+    from email.utils import parsedate_to_datetime
+
+    if value is None:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    try:
+        seconds = float(raw)
+    except ValueError:
+        try:
+            retry_at = parsedate_to_datetime(raw)
+            if retry_at.tzinfo is None:
+                retry_at = retry_at.replace(tzinfo=timezone.utc)
+            current = datetime.fromtimestamp(
+                now if now is not None else datetime.now(timezone.utc).timestamp(),
+                tz=timezone.utc,
+            )
+            seconds = (retry_at.astimezone(timezone.utc) - current).total_seconds()
+        except (TypeError, ValueError, OverflowError, OSError):
+            return None
+    if not math.isfinite(seconds):
+        return None
+    return max(0, math.ceil(seconds))
+
+
 
 def collect_inventory_pages(
     fetch_page: Callable[[str | None], dict[str, Any]],
