@@ -1095,3 +1095,114 @@ def test_funpay_diagnostic_does_not_reuse_old_buyer_url_after_latest_refund():
     assert result["latest_buyer_input"]["has_trade_url"] is False
     assert "OLD_SECRET" not in repr(result)
 
+
+
+# Regression coverage for manual Steam offer reconciliation after FunPay refunds.
+import pytest
+
+
+@pytest.mark.parametrize("resolution", ["accepted", "returned"])
+def test_offer_resolution_blocks_recorded_funpay_refund(resolution):
+    from funpay_orders import offer_resolution_block_reason
+
+    record = {"status": "delivery_uncertain", "funpay_refunded": True}
+    reason = offer_resolution_block_reason(record, resolution)
+
+    assert isinstance(reason, str) and reason.strip()
+
+
+@pytest.mark.parametrize("status", ["refund_review", "refunded", "refunded_cancelled"])
+@pytest.mark.parametrize("resolution", ["accepted", "returned"])
+def test_offer_resolution_blocks_refund_statuses(status, resolution):
+    from funpay_orders import offer_resolution_block_reason
+
+    record = {"status": status, "funpay_refunded": False}
+    reason = offer_resolution_block_reason(record, resolution)
+
+    assert isinstance(reason, str) and reason.strip()
+
+
+@pytest.mark.parametrize(
+    "status",
+    ["offer_sent", "offer_pending_confirmation", "delivery_uncertain", "sending"],
+)
+@pytest.mark.parametrize("resolution", ["accepted", "returned"])
+def test_offer_resolution_allows_eligible_unreffunded_orders(status, resolution):
+    from funpay_orders import offer_resolution_block_reason
+
+    record = {"status": status, "funpay_refunded": False}
+
+    assert offer_resolution_block_reason(record, resolution) is None
+
+
+def test_offer_resolution_rejects_unsupported_resolution():
+    from funpay_orders import offer_resolution_block_reason
+
+    assert offer_resolution_block_reason(
+        {"status": "offer_sent"}, "retry"
+    )
+
+
+
+# Regression coverage for a FunPay refund arriving while the Steam POST is in flight.
+@pytest.mark.parametrize(
+    "outcome,expected",
+    [
+        ("sent", "offer_sent"),
+        ("created_unconfirmed", "offer_pending_confirmation"),
+        ("unknown", "delivery_uncertain"),
+        ("failed", "retry_required"),
+    ],
+)
+def test_delivery_result_status_preserves_refund_review_during_inflight_send(outcome, expected):
+    from funpay_orders import funpay_delivery_result_status
+
+    record = {"status": "refund_review", "funpay_refunded": True}
+
+    assert funpay_delivery_result_status(record, outcome) == "refund_review"
+
+
+@pytest.mark.parametrize(
+    "status",
+    ["sending", "offer_sent", "delivery_uncertain", "retry_required"],
+)
+@pytest.mark.parametrize(
+    "outcome",
+    ["sent", "created_unconfirmed", "unknown", "failed"],
+)
+def test_delivery_result_status_promotes_refund_flag_to_refund_review(status, outcome):
+    from funpay_orders import funpay_delivery_result_status
+
+    record = {"status": status, "funpay_refunded": True}
+
+    assert funpay_delivery_result_status(record, outcome) == "refund_review"
+
+
+@pytest.mark.parametrize("status", ["refunded", "refunded_cancelled"])
+@pytest.mark.parametrize(
+    "outcome",
+    ["sent", "created_unconfirmed", "unknown", "failed"],
+)
+def test_delivery_result_status_never_downgrades_final_refund_status(status, outcome):
+    from funpay_orders import funpay_delivery_result_status
+
+    record = {"status": status, "funpay_refunded": True}
+
+    assert funpay_delivery_result_status(record, outcome) == status
+
+
+@pytest.mark.parametrize(
+    "outcome,expected",
+    [
+        ("sent", "offer_sent"),
+        ("created_unconfirmed", "offer_pending_confirmation"),
+        ("unknown", "delivery_uncertain"),
+        ("failed", "retry_required"),
+    ],
+)
+def test_delivery_result_status_preserves_normal_outcome_mapping(outcome, expected):
+    from funpay_orders import funpay_delivery_result_status
+
+    record = {"status": "sending", "funpay_refunded": False}
+
+    assert funpay_delivery_result_status(record, outcome) == expected

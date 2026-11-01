@@ -755,7 +755,7 @@ def send_funpay_chat_message(node_id, text):
         return False, f"Ошибка отправки: {e}"
 
 from order_parser import detect_order_sets_and_quantity, is_funpay_refund_notification, is_paid_order_notification
-from funpay_orders import (compact_funpay_text, decode_text_attachment, download_text_attachment, extract_order_number, extract_steam_trade_url, extract_text_attachment_href, filter_reserved_assets, find_open_order_for_chat, funpay_cold_start_blockers, funpay_input_signature, inventory_cache_freshness_error, mark_input_received, open_orders_for_chat, parse_funpay_history_payload, register_payment, message_signature, restore_reserved_assets, summarize_funpay_chat_diagnostics, voucher_redemption_block_reason, voucher_reset_block_reason)
+from funpay_orders import (compact_funpay_text, decode_text_attachment, download_text_attachment, extract_order_number, extract_steam_trade_url, extract_text_attachment_href, filter_reserved_assets, find_open_order_for_chat, funpay_cold_start_blockers, funpay_input_signature, inventory_cache_freshness_error, mark_input_received, offer_resolution_block_reason, funpay_delivery_result_status, open_orders_for_chat, parse_funpay_history_payload, register_payment, message_signature, restore_reserved_assets, summarize_funpay_chat_diagnostics, voucher_redemption_block_reason, voucher_reset_block_reason)
 from sales_analytics import summarize_sales
 from playerok_orders import (
     active_orders_for_chat,
@@ -1100,28 +1100,34 @@ def record_funpay_buyer_input(node_id, trade_url, input_kind, selected_order_key
 
         record["updated_at"] = int(time.time())
         record["last_delivery_message"] = str(result_message)[:350]
+        final_status = funpay_delivery_result_status(record, outcome)
         if outcome == "sent":
-            record["status"] = "offer_sent"
+            record["status"] = final_status
             record["steam_trade_offer_id"] = str(offer_id)
             record["steam_offer_confirmed"] = True
             record["trade_offer_created_at"] = int(time.time())
         elif outcome == "created_unconfirmed":
             # The offer exists: never retry its creation. ASF confirmation may still be pending.
-            record["status"] = "offer_pending_confirmation"
+            record["status"] = final_status
             record["steam_trade_offer_id"] = str(offer_id)
             record["steam_offer_confirmed"] = False
             record["trade_offer_created_at"] = int(time.time())
             record.setdefault("notes", []).append("Steam создал предложение, но ASF не подтвердил автоматическое подтверждение.")
         elif outcome == "unknown":
-            record["status"] = "delivery_uncertain"
+            record["status"] = final_status
             record.setdefault("notes", []).append(
                 "Ответ Steam не позволил определить результат. Повторная отправка автоматически запрещена во избежание дублирования."
             )
         else:
             # A definite rejection did not return a tradeofferid. Keep stock reserved
             # and allow the buyer to send corrected data; do not save the URL.
-            record["status"] = "retry_required"
+            record["status"] = final_status
             record.setdefault("notes", []).append("Steam вернул отказ без ID предложения; резерв сохранён, повтор возможен после нового входа.")
+        if final_status == "refund_review":
+            record.setdefault("notes", []).append(
+                "Результат Steam получен после уведомления о возврате FunPay. "
+                "Статус refund_review и резерв сохранены; требуется ручная сверка."
+            )
         save_json(FP_ORDERS_FILE, data)
         return record, record["status"], result_message
 
@@ -1201,7 +1207,21 @@ def _report_funpay_input_result(admin_id, node_id, input_record, input_result, d
         (input_record.get("funpay_order_number") or input_record.get("key"))
         if input_record else f"чат #{node_id}"
     )
-    if input_result == "offer_sent":
+    if input_result == "refund_review":
+        offer_id = input_record.get("steam_trade_offer_id") if input_record else None
+        offer_state = (
+            f"ID Steam-предложения: #{offer_id}."
+            if offer_id else
+            "ID Steam-предложения не получен."
+        )
+        delivery_detail = f" Ответ Steam: {str(detail)[:240]}" if detail else ""
+        bot.send_message(
+            admin_id,
+            f"🚨 FunPay: по заказу {order_label} поступил возврат во время отправки. "
+            f"{offer_state}{delivery_detail} Заказ оставлен в refund_review, резерв не снят. "
+            "Повторная отправка заблокирована; требуется ручная сверка FunPay и Steam."
+        )
+    elif input_result == "offer_sent":
         bot.send_message(
             admin_id,
             f"✅ FunPay: Steam-предложение создано. Заказ: {order_label}. "
@@ -2852,10 +2872,9 @@ def funpay_offer_resolve_cmd(message):
         if not isinstance(record, dict):
             bot.send_message(message.chat.id, "❌ Заказ не найден.")
             return
-        if record.get("status") not in {
-            "offer_sent", "offer_pending_confirmation", "delivery_uncertain", "sending"
-        }:
-            bot.send_message(message.chat.id, "❌ У заказа нет предложения, которое нужно сверить.")
+        block_reason = offer_resolution_block_reason(record, resolution)
+        if block_reason:
+            bot.send_message(message.chat.id, block_reason)
             return
         if resolution == "accepted":
             record["reservation"] = None
