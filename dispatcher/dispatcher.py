@@ -1,4 +1,4 @@
-"""Read-only queue policy for the Cloud Codex dispatcher.
+""""Read-only queue policy for the Cloud Codex dispatcher.
 
 This module validates GitHub issue-shaped records supplied by a separate
 read-only adapter. It never calls GitHub, executes Codex, or mutates state.
@@ -36,8 +36,8 @@ MAX_TITLE_CHARS = 160
 MAX_ISSUE_BODY_CHARS = 6000
 MAX_ISSUE_NUMBER = 2_147_483_647
 
-_WORD = re.compile(r"\b(?:implement|fix|add|refactor|test|document|audit)\b", re.I)
-_PATH = re.compile(r"(?:^|\s)([A-Za-z0-9_./-]+(?:\.[A-Za-z0-9_-]+)?)(?:$|\s|[,;:])")
+_WORD = re.compile(r"\\b(?:implement|fix|add|refactor|test|document|audit)\\b", re.I)
+_PATH = re.compile(r"(?:^|\\s)([A-Za-z0-9_./-]+(?:\\.[A-Za-z0-9_-]+)?)(?:$|\\s|[,;:])")
 
 
 @dataclass(frozen=True)
@@ -63,13 +63,18 @@ def _labels(issue: Mapping[str, Any]) -> set[str]:
 
 
 def _is_protected_path(path: str) -> bool:
-    normalized = path.replace("\\", "/").strip().lower()
+    normalized = path.replace("\\\\", "/").strip().lower()
     if not normalized or normalized.startswith("/"):
         return True
     parts = normalized.split("/")
     if any(part in {"..", ".git", ".github"} for part in parts):
         return True
-    normalized = normalized.lstrip("./")
+    # Remove only standalone current-directory segments. Do not use lstrip("./"):
+    # it strips leading dots from dotfiles such as .env.
+    parts = [part for part in parts if part not in {"", "."}]
+    if any(part == ".env" or part.startswith(".env.") for part in parts):
+        return True
+    normalized = "/".join(parts)
     return any(
         normalized == item or normalized.startswith(item.rstrip("/") + "/")
         for item in PROTECTED_PATHS
@@ -97,7 +102,7 @@ def validate_issue(issue: Mapping[str, Any]) -> QueueDecision:
     if not isinstance(body, str) or len(body) > MAX_ISSUE_BODY_CHARS:
         return QueueDecision(number, title, False, "invalid or oversized issue body")
 
-    task_text = f"{title}\n{body}"
+    task_text = f"{title}\\n{body}"
     # Only inspect an explicit allowlist block. Prose may mention protected
     # filenames as examples or prohibitions and must not be treated as targets.
     # Parse only Markdown list entries immediately following the explicit
@@ -112,7 +117,7 @@ def validate_issue(issue: Mapping[str, Any]) -> QueueDecision:
                     break
                 if not (stripped.startswith("- ") or stripped.startswith("* ")):
                     break
-                declared_paths.append(stripped[2:].strip().strip("`'\""))
+                declared_paths.append(stripped[2:].strip().strip("`'\\\""))
             break
     if not declared_paths:
         return QueueDecision(number, title, False, "missing explicit Files to change allowlist")
