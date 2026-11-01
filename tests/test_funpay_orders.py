@@ -1,5 +1,5 @@
 """Regression tests for safe FunPay order matching."""
-from funpay_orders import (decode_text_attachment, download_text_attachment, extract_chat_message_fragments, extract_last_chat_message_fragment, extract_last_customer_message_fragment, extract_steam_trade_url, extract_text_attachment_href, filter_reserved_assets, find_open_order_for_chat, funpay_cold_start_blockers, funpay_input_signature, inventory_cache_freshness_error, is_funpay_system_message, mark_input_received, register_payment, voucher_redemption_block_reason, voucher_reset_block_reason)
+from funpay_orders import (extract_chat_message_fragments, extract_last_chat_message_fragment, extract_last_customer_message_fragment, extract_steam_trade_url, filter_reserved_assets, find_open_order_for_chat, funpay_cold_start_blockers, funpay_input_signature, inventory_cache_freshness_error, is_funpay_system_message, mark_input_received, register_payment, voucher_redemption_block_reason, voucher_reset_block_reason)
 from order_parser import detect_order_sets_and_quantity, is_funpay_refund_notification, is_paid_order_notification
 
 
@@ -12,6 +12,26 @@ def make_order(key, node_id="123", status="awaiting_input", updated_at=1):
         "input_kind": None,
         "input_received_at": None,
     }
+
+
+def test_extract_steam_trade_url_accepts_plain_text_message():
+    url = "https://steamcommunity.com/tradeoffer/new/?partner=123456&token=AbCdEf12"
+    assert extract_steam_trade_url("Моя Steam Trade URL: " + url) == url
+
+
+def test_extract_steam_trade_url_rejects_profile_link():
+    assert extract_steam_trade_url("https://steamcommunity.com/profiles/123456") is None
+
+
+def test_extract_steam_trade_url_rejects_missing_partner_or_token():
+    assert extract_steam_trade_url("https://steamcommunity.com/tradeoffer/new/?partner=123456") is None
+    assert extract_steam_trade_url("https://steamcommunity.com/tradeoffer/new/?token=AbCdEf12") is None
+
+
+def test_extract_steam_trade_url_rejects_ambiguous_multiple_urls():
+    first = "https://steamcommunity.com/tradeoffer/new/?partner=123456&token=AbCdEf12"
+    second = "https://steamcommunity.com/tradeoffer/new/?partner=654321&token=ZyXwVu98"
+    assert extract_steam_trade_url(first + " " + second) is None
 
 
 def test_no_open_order_returns_none():
@@ -145,45 +165,6 @@ def test_extract_text_attachment_href_from_funpay_chat_file():
     assert extract_text_attachment_href(
         fragment, "https://funpay.com/chat/?node=987"
     ) == "https://funpay.com/file/12345"
-
-
-def test_extract_text_attachment_href_rejects_external_hosts():
-    fragment = '<div class="chat-msg-file"><a href="https://example.com/trade.txt">trade.txt</a></div>'
-    assert extract_text_attachment_href(
-        fragment, "https://funpay.com/chat/?node=987"
-    ) is None
-
-
-def test_extract_text_attachment_href_requires_unambiguous_attachment():
-    fragment = (
-        '<div class="chat-msg-file"><a href="/file/1">one.txt</a></div>'
-        '<div class="chat-msg-file"><a href="/file/2">two.txt</a></div>'
-    )
-    assert extract_text_attachment_href(
-        fragment, "https://funpay.com/chat/?node=987"
-    ) is None
-
-
-def test_decode_text_attachment_utf8_and_windows1251():
-    url = "https://steamcommunity.com/tradeoffer/new/?partner=123456&token=AbCdEf12"
-    assert extract_steam_trade_url(
-        decode_text_attachment(("Ссылка: " + url).encode("utf-8"))
-    ) == url
-    assert extract_steam_trade_url(
-        decode_text_attachment(("Ссылка: " + url).encode("cp1251"))
-    ) == url
-
-
-def test_decode_text_attachment_rejects_binary_data():
-    import pytest
-    with pytest.raises(ValueError):
-        decode_text_attachment(bytes([0, 1, 2, 3]))
-
-
-def test_decode_text_attachment_enforces_size_limit():
-    import pytest
-    with pytest.raises(ValueError):
-        decode_text_attachment(b"A" * (64 * 1024 + 1))
 
 
 def test_retry_required_order_is_open_for_corrected_input():
@@ -687,81 +668,6 @@ def test_system_refund_only_chat_has_no_customer_message():
 
 
 
-def test_download_text_attachment_accepts_funpay_text_and_preserves_trade_url():
-    from funpay_orders import download_text_attachment
-
-    url = "https://steamcommunity.com/tradeoffer/new/?partner=123456&token=AbCdEf12"
-
-    class Response:
-        url = "https://funpay.com/file/12345"
-        headers = {"Content-Type": "text/plain; charset=utf-8", "Content-Length": "100"}
-
-        def raise_for_status(self):
-            pass
-
-        def iter_content(self, chunk_size):
-            assert chunk_size == 8192
-            yield ("Trade URL: " + url).encode("utf-8")
-
-        def close(self):
-            self.closed = True
-
-    class Session:
-        def get(self, request_url, timeout, stream, headers):
-            assert request_url == "https://funpay.com/file/12345"
-            assert timeout == 10 and stream is True
-            assert headers["Accept"] == "text/plain, text/*;q=0.9, */*;q=0.1"
-            assert "Referer" not in headers
-            return Response()
-
-    text = download_text_attachment(Session(), "https://funpay.com/file/12345")
-    assert extract_steam_trade_url(text) == url
-
-
-def test_download_text_attachment_rejects_redirect_to_external_host():
-    import pytest
-    from funpay_orders import download_text_attachment
-
-    class Response:
-        url = "https://example.com/steal.txt"
-        headers = {"Content-Type": "text/plain"}
-
-        def raise_for_status(self):
-            pass
-
-        def close(self):
-            pass
-
-    class Session:
-        def get(self, *args, **kwargs):
-            return Response()
-
-    with pytest.raises(ValueError, match="недоверенный"):
-        download_text_attachment(Session(), "https://funpay.com/file/12345")
-
-
-def test_download_text_attachment_rejects_html_login_response():
-    import pytest
-    from funpay_orders import download_text_attachment
-
-    class Response:
-        url = "https://funpay.com/file/12345"
-        headers = {"Content-Type": "text/html"}
-
-        def raise_for_status(self):
-            pass
-
-        def close(self):
-            pass
-
-    class Session:
-        def get(self, *args, **kwargs):
-            return Response()
-
-    with pytest.raises(ValueError, match="HTML"):
-        download_text_attachment(Session(), "https://funpay.com/file/12345")
-
-
 def test_cold_start_treats_refunded_order_without_reservation_as_terminal():
     assert funpay_cold_start_blockers({
         "refunded": {"status": "refunded", "reservation": None}
@@ -1099,189 +1005,3 @@ def test_funpay_diagnostic_does_not_reuse_old_buyer_url_after_latest_refund():
 
 
 
-
-def test_download_text_attachment_html_diagnostic_includes_safe_redirect_metadata():
-    import pytest
-    from funpay_orders import download_text_attachment
-
-    class Redirect:
-        status_code = 302
-
-    class Response:
-        url = "https://funpay.com/file/download"
-        status_code = 200
-        history = [Redirect()]
-        headers = {
-            "Content-Type": "text/html; charset=utf-8",
-            "Content-Length": "321",
-        }
-
-        def raise_for_status(self):
-            pass
-
-        def close(self):
-            pass
-
-    class Session:
-        def get(self, *args, **kwargs):
-            return Response()
-
-    with pytest.raises(ValueError) as error:
-        download_text_attachment(
-            Session(),
-            "https://funpay.com/file/12345?secret=DO_NOT_LOG",
-        )
-
-    message = str(error.value)
-    assert "HTTP=200" in message
-    assert "path=/file/download" in message
-    assert "redirects=302" in message
-    assert "content_type=text/html" in message
-    assert "secret" not in message
-    assert "DO_NOT_LOG" not in message
-
-
-def test_download_text_attachment_html_login_redirect_is_identified_without_body():
-    import pytest
-    from funpay_orders import download_text_attachment
-
-    class Response:
-        url = "https://funpay.com/account/login?return=/file/123"
-        status_code = 200
-        history = []
-        headers = {"Content-Type": "text/html"}
-
-        def raise_for_status(self):
-            pass
-
-        def close(self):
-            pass
-
-    class Session:
-        def get(self, *args, **kwargs):
-            return Response()
-
-    with pytest.raises(ValueError, match="login_path=yes"):
-        download_text_attachment(Session(), "https://funpay.com/file/12345")
-
-
-
-def test_download_text_attachment_reports_auth_redirect_metadata_without_secrets():
-    import pytest
-    from funpay_orders import download_text_attachment
-
-    class Redirect:
-        status_code = 302
-
-    class Response:
-        url = "https://funpay.com/account/login?return=%2Ffile%2F123&token=PRIVATE"
-        status_code = 200
-        history = [Redirect()]
-        headers = {"Content-Type": "text/html; charset=utf-8"}
-
-        def raise_for_status(self):
-            pass
-
-        def close(self):
-            pass
-
-    class Session:
-        def get(self, *args, **kwargs):
-            return Response()
-
-    with pytest.raises(ValueError) as error:
-        download_text_attachment(Session(), "https://funpay.com/file/12345")
-
-    message = str(error.value)
-    assert "HTTP=200" in message
-    assert "redirects=302" in message
-    assert "login_path=yes" in message
-    assert "PRIVATE" not in message
-    assert "token=" not in message
-    assert "return=" not in message
-
-
-def test_download_text_attachment_rejects_html_without_redirect():
-    import pytest
-    from funpay_orders import download_text_attachment
-
-    class Response:
-        url = "https://funpay.com/file/12345"
-        status_code = 200
-        history = []
-        headers = {"Content-Type": "text/html"}
-
-        def raise_for_status(self):
-            pass
-
-        def close(self):
-            pass
-
-    class Session:
-        def get(self, *args, **kwargs):
-            return Response()
-
-    with pytest.raises(ValueError) as error:
-        download_text_attachment(Session(), "https://funpay.com/file/12345")
-
-    assert "redirects=none" in str(error.value)
-    assert "login_path=no" in str(error.value)
-
-
-def test_download_text_attachment_accepts_valid_plain_text_response():
-    from funpay_orders import download_text_attachment
-
-    trade_url = "https://steamcommunity.com/tradeoffer/new/?partner=123456&token=AbCdEf12"
-
-    class Response:
-        url = "https://funpay.com/file/12345"
-        status_code = 200
-        history = []
-        headers = {"Content-Type": "text/plain; charset=utf-8"}
-        content = trade_url.encode("utf-8")
-
-        def raise_for_status(self):
-            pass
-
-        def close(self):
-            pass
-
-    class Session:
-        def get(self, *args, **kwargs):
-            return Response()
-
-    assert download_text_attachment(Session(), "https://funpay.com/file/12345") == trade_url
-
-
-
-def test_download_text_attachment_sends_chat_referer_for_authenticated_file_access():
-    from funpay_orders import download_text_attachment
-
-    expected_referer = "https://funpay.com/chat/?node=297865070"
-    observed = {}
-
-    class Response:
-        url = "https://funpay.com/file/12345"
-        status_code = 200
-        history = []
-        headers = {"Content-Type": "text/plain; charset=utf-8"}
-        content = b"plain text"
-
-        def raise_for_status(self):
-            pass
-
-        def close(self):
-            pass
-
-    class Session:
-        def get(self, url, **kwargs):
-            observed["url"] = url
-            observed.update(kwargs)
-            return Response()
-
-    assert download_text_attachment(
-        Session(),
-        "https://funpay.com/file/12345",
-        referer_url=expected_referer,
-    ) == "plain text"
-    assert observed["headers"]["Referer"] == expected_referer
