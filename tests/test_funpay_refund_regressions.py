@@ -92,7 +92,7 @@ def test_funpay_ledger_integrity_notifier_is_explicitly_fail_closed():
 
     assert "повреждён или недоступен" in notifier
     assert "не заменялся пустым" in notifier
-    assert "резервирование, обработка заказов и выдача остановлены" in notifier
+    assert "Резервирование, обработка заказов и выдача остановлены" in notifier
     assert "bot.send_message(admin_id, message)" in notifier
     assert "logging.critical(" in notifier
 
