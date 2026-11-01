@@ -511,7 +511,7 @@ def extract_paid_order_events(html_document: str) -> list[tuple[str, str]]:
 
 def filter_reserved_assets(cache_data: dict, orders: dict | None = None,
                           vouchers: dict | None = None) -> dict:
-    """Filter reserved assets, quarantining all stock when ownership is ambiguous."""
+    """Filter reserved assets; quarantine all stock when ownership is ambiguous."""
     if not isinstance(cache_data, dict):
         return {}
 
@@ -528,35 +528,37 @@ def filter_reserved_assets(cache_data: dict, orders: dict | None = None,
         vouchers = {}
 
     reserved_ids = set()
-
-    def register_reservation_assets(asset_ids):
-        nonlocal malformed_reservation
-        # One Steam asset can belong to one active order/voucher only.
-        if any(asset_id in reserved_ids for asset_id in asset_ids):
-            malformed_reservation = True
-        reserved_ids.update(asset_ids)
+    reservation_required_statuses = {
+        "reserved", "sending", "delivery_uncertain", "offer_sent",
+        "offer_pending_confirmation", "refund_review",
+    }
 
     def collect_asset_ids(raw_ids):
         if not isinstance(raw_ids, list) or not raw_ids:
             return None
         normalized = []
-        for asset_id in raw_ids:
-            value = str(asset_id)
+        for raw_id in raw_ids:
+            value = str(raw_id)
             if not value.isdigit() or value in normalized:
                 return None
             normalized.append(value)
         return normalized
 
+    def register_reservation_assets(asset_ids):
+        nonlocal malformed_reservation
+        if any(asset_id in reserved_ids for asset_id in asset_ids):
+            malformed_reservation = True
+        reserved_ids.update(asset_ids)
+
     for record in orders.values():
-        if not isinstance(record, dict):
+        if not isinstance(record, dict) or "reservation" not in record:
             malformed_reservation = True
             continue
-        reservation = record.get("reservation")
-        # A clean cancelled order is terminal only when reservation is explicitly
-        # cleared. Empty or malformed reservation objects must fail closed.
-        if record.get("status") == "cancelled" and reservation is None:
-            continue
+        reservation = record["reservation"]
+        status = str(record.get("status") or "").lower()
         if reservation is None:
+            if status in reservation_required_statuses:
+                malformed_reservation = True
             continue
         if not isinstance(reservation, dict):
             malformed_reservation = True
@@ -572,8 +574,9 @@ def filter_reserved_assets(cache_data: dict, orders: dict | None = None,
         if not isinstance(voucher, dict):
             malformed_reservation = True
             continue
-        has_reserved_delivery = voucher.get("delivery_state") in reserved_voucher_states or (
-            voucher.get("used") and voucher.get("trade_offer_id")
+        has_reserved_delivery = (
+            voucher.get("delivery_state") in reserved_voucher_states
+            or (voucher.get("used") and voucher.get("trade_offer_id"))
         )
         if has_reserved_delivery:
             asset_ids = collect_asset_ids(voucher.get("reserved_asset_ids"))
@@ -583,16 +586,13 @@ def filter_reserved_assets(cache_data: dict, orders: dict | None = None,
             register_reservation_assets(asset_ids)
 
     if malformed_reservation:
-        # A damaged reservation makes exact asset ownership unknowable.
-        # Quarantine the full stock view rather than risk a duplicate offer.
         quarantined = dict(cache_data)
         games = cache_data.get("games", {})
         quarantined_games = {}
         if isinstance(games, dict):
             for game_name, cards in games.items():
-                if not isinstance(cards, dict):
-                    continue
-                quarantined_games[game_name] = {card_name: [] for card_name in cards}
+                if isinstance(cards, dict):
+                    quarantined_games[game_name] = {card_name: [] for card_name in cards}
         quarantined["games"] = quarantined_games
         quarantined["total_cards"] = 0
         return quarantined
@@ -677,10 +677,9 @@ def funpay_cold_start_blockers(orders: dict) -> list[tuple[str, str]]:
             blockers.append((str(key), "invalid_record"))
             continue
         status = str(record.get("status", "unknown"))
-        reservation = record.get("reservation")
-        # A cleared reservation is represented only by explicit None. Empty
-        # containers are malformed legacy state, not proof that stock is free.
-        has_reservation = reservation is not None
+        reservation_is_cleared = "reservation" in record and record["reservation"] is None
+        # Missing reservation metadata is ambiguous and cannot prove that stock is free.
+        has_reservation = not reservation_is_cleared
         if status not in {"completed", "cancelled", "refunded"} or has_reservation:
             blockers.append((str(key), status))
     return blockers
