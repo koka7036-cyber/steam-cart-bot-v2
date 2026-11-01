@@ -991,3 +991,81 @@ def test_funpay_diagnostic_does_not_reuse_old_buyer_url_after_latest_refund():
 
 
 
+
+
+
+def test_filter_reserved_assets_quarantines_all_stock_for_malformed_order_reservation():
+    cache = {"total_cards": 2, "games": {"Game": {"Card A": ["12345", "23456"], "Card B": ["34567"]}}}
+    orders = {"damaged": {"status": "reserved", "reservation": {"asset_ids": "12345"}}}
+    filtered = filter_reserved_assets(cache, orders, {})
+    assert filtered["games"] == {"Game": {"Card A": [], "Card B": []}}
+    assert filtered["total_cards"] == 0
+    assert cache["games"]["Game"]["Card A"] == ["12345", "23456"]
+
+
+def test_filter_reserved_assets_quarantines_all_stock_for_malformed_voucher_reservation():
+    cache = {"games": {"Game": {"Card": ["12345", "23456"]}}}
+    vouchers = {"code": {"delivery_state": "uncertain", "reserved_asset_ids": "12345"}}
+    filtered = filter_reserved_assets(cache, {}, vouchers)
+    assert filtered["games"] == {"Game": {"Card": []}}
+    assert filtered["total_cards"] == 0
+
+
+def test_filter_reserved_assets_quarantines_duplicate_assets_across_orders():
+    cache = {"total_cards": 2, "games": {"Game": {"Card": ["12345", "23456"]}}}
+    orders = {
+        "order-a": {"status": "reserved", "reservation": {"asset_ids": ["12345"]}},
+        "order-b": {"status": "delivery_uncertain", "reservation": {"asset_ids": ["12345"]}},
+    }
+    filtered = filter_reserved_assets(cache, orders, {})
+    assert filtered["games"] == {"Game": {"Card": []}}
+    assert filtered["total_cards"] == 0
+    assert cache["games"]["Game"]["Card"] == ["12345", "23456"]
+
+
+def test_filter_reserved_assets_quarantines_order_voucher_asset_collision():
+    cache = {"total_cards": 2, "games": {"Game": {"Card": ["12345", "23456"]}}}
+    orders = {"order-a": {"status": "reserved", "reservation": {"asset_ids": ["12345"]}}}
+    vouchers = {"voucher": {"delivery_state": "uncertain", "reserved_asset_ids": ["12345"]}}
+    filtered = filter_reserved_assets(cache, orders, vouchers)
+    assert filtered["games"] == {"Game": {"Card": []}}
+    assert filtered["total_cards"] == 0
+
+
+def test_filter_reserved_assets_quarantines_invalid_reservation_container_or_record():
+    cache = {"games": {"Game": {"Card": ["12345", "23456"]}}}
+    cases = [
+        (["invalid-order-map"], {}),
+        ({"bad": "not-a-record"}, {}),
+        ({"bad": {"status": "reserved", "reservation": []}}, {}),
+        ({}, ["invalid-voucher-map"]),
+        ({}, {"bad": None}),
+        ({}, {"bad": {"delivery_state": "uncertain", "reserved_asset_ids": []}}),
+    ]
+    for orders, vouchers in cases:
+        filtered = filter_reserved_assets(cache, orders, vouchers)
+        assert filtered["games"] == {"Game": {"Card": []}}
+        assert filtered["total_cards"] == 0
+
+
+def test_filter_reserved_assets_quarantines_duplicate_asset_ids_inside_one_reservation():
+    cache = {"games": {"Game": {"Card": ["12345", "23456"]}}}
+    orders = {"bad": {"status": "reserved", "reservation": {"asset_ids": ["12345", "12345"]}}}
+    filtered = filter_reserved_assets(cache, orders, {})
+    assert filtered["games"] == {"Game": {"Card": []}}
+    assert filtered["total_cards"] == 0
+
+
+def test_filter_reserved_assets_hides_reservation_on_cancelled_order_but_not_clean_cancelled_order():
+    cache = {"games": {"Game": {"Card": ["12345", "23456"]}}}
+    orders = {
+        "cancelled-with-reservation": {
+            "status": "cancelled",
+            "reservation": {"asset_ids": ["12345"]},
+        },
+        "cancelled-clean": {"status": "cancelled", "reservation": None},
+    }
+    filtered = filter_reserved_assets(cache, orders, {})
+    assert filtered["games"]["Game"]["Card"] == ["23456"]
+    assert filtered["total_cards"] == 1
+
