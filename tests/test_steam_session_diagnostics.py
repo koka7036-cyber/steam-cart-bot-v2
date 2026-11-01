@@ -1,5 +1,3 @@
-import math
-
 import pytest
 
 from steam_session_diagnostics import classify_session_metadata
