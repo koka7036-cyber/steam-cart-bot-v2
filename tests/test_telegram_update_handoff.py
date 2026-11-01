@@ -140,6 +140,15 @@ def test_funpay_order_flow_supports_text_only_trade_urls_refunds_and_exact_admin
     assert "input_kind = \"text_attachment\"" not in source
 
 
+def test_fprelease_checks_refund_guard_before_restoring_stock():
+    source = read_project_file("bot.py")
+    start = source.index('@bot.message_handler(commands=["fprelease"])')
+    function = source[start:]
+    guard = function.index("funpay_release_refund_block_reason(record)")
+    restore = function.index("restore_reservation_to_cache(reservation)")
+    assert guard < restore
+
+
 def test_funpay_buyer_input_requires_reservation_before_marking_sending():
     source = read_project_file("bot.py")
     start = source.index("def record_funpay_buyer_input")
