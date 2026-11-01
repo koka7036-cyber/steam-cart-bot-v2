@@ -17,6 +17,7 @@ import rsa
 import telebot
 from telebot import types, apihelper
 from runtime_paths import resolve_runtime_paths
+from admin_navigation import AdminNavigation
 from steam_inventory import (
     SteamInventoryPaginationError,
     SteamInventoryRateLimitError,
@@ -2382,7 +2383,7 @@ def start_playerok_monitor():
 
 ADMIN_MAIN_MENU = "🏠 Главное меню"
 ADMIN_BACK_MENU = "⬅️ Назад"
-admin_menu_state = {}
+admin_navigation = AdminNavigation()
 pending_steam_password_admin = set()
 restart_requested = False
 update_restart_requested = False
@@ -2390,7 +2391,7 @@ update_restart_requested = False
 def build_admin_keyboard():
     db = load_json(DB_FILE, {"admin_id": None, "vouchers": {}})
     admin_id = db.get("admin_id")
-    section = admin_menu_state.get(admin_id, "main")
+    section = admin_navigation.current(admin_id) if admin_id is not None else "main"
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
 
     if section == "stock":
@@ -3368,9 +3369,10 @@ def handle_all_messages(message):
         if text == "🔐 Авторизация Steam":
             sess = load_json(SESSION_FILE, {})
             valid = bool(sess.get("steamLoginSecure") and time.time() - sess.get("timestamp", 0) < 43200)
+            admin_navigation.open(message.chat.id, "steam_auth")
             markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
             markup.add("🔑 Войти в Steam", "📡 Статус Steam")
-            markup.add("⬅️ Назад")
+            markup.add("⬅️ Назад", "🏠 Главное меню")
             bot.send_message(message.chat.id, "🔐 <b>Авторизация Steam</b>\nСессия: " + ("действует по локальному таймеру" if valid else "нет действующей локальной сессии") + "\nПароль запрашивается только по команде входа. Не отправляй пароль в группы; бот попробует удалить сообщение сразу после получения. Удаление не гарантировано.", reply_markup=markup, parse_mode="HTML")
             return
         if text == "📡 Статус Steam":
@@ -3396,12 +3398,13 @@ def handle_all_messages(message):
             "⚙️ Настройки": "settings",
         }
         if text in section_buttons:
-            admin_menu_state[message.chat.id] = section_buttons[text]
+            section = admin_navigation.open(message.chat.id, section_buttons[text])
             bot.send_message(message.chat.id, "Выбери действие в разделе:", reply_markup=build_admin_keyboard())
             return
         if text in {ADMIN_BACK_MENU, ADMIN_MAIN_MENU}:
-            admin_menu_state[message.chat.id] = "main"
-            bot.send_message(message.chat.id, "Главное меню:", reply_markup=build_admin_keyboard())
+            section = admin_navigation.reset(message.chat.id) if text == ADMIN_MAIN_MENU else admin_navigation.back(message.chat.id)
+            title = "Главное меню:" if section == "main" else "Вернулись в раздел. Выбери действие:"
+            bot.send_message(message.chat.id, title, reply_markup=build_admin_keyboard())
             return
         if text == "📋 Последние заказы FunPay":
             funpay_orders_cmd(message)
