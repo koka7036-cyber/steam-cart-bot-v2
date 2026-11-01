@@ -462,6 +462,26 @@ def compact_funpay_text(value: str, max_chars: int | None = None) -> str:
     return text
 
 
+def _safe_attachment_response_diagnostic(response) -> str:
+    """Describe an unexpected HTML response without exposing query strings or body."""
+    status = getattr(response, "status_code", None)
+    final_url = getattr(response, "url", "") or ""
+    parsed = urlparse(final_url)
+    safe_path = parsed.path[:120] or "/"
+    history = getattr(response, "history", ()) or ()
+    redirect_codes = ",".join(
+        str(getattr(item, "status_code", "?")) for item in history[:5]
+    ) or "none"
+    headers = getattr(response, "headers", {}) or {}
+    content_type = str(headers.get("Content-Type", "")).split(";", 1)[0].strip().lower()
+    login_path = bool(re.search(r"(?:login|auth|signin|account)", safe_path, re.IGNORECASE))
+    return (
+        f"HTTP={status if status is not None else 'unknown'}; "
+        f"path={safe_path}; redirects={redirect_codes}; "
+        f"content_type={content_type or 'unknown'}; login_path={'yes' if login_path else 'no'}"
+    )
+
+
 def download_text_attachment(session, attachment_url: str,
                             max_bytes: int = _MAX_TEXT_ATTACHMENT_BYTES) -> str:
     """Download one small, trusted FunPay text attachment and decode it safely.
@@ -482,7 +502,11 @@ def download_text_attachment(session, attachment_url: str,
         headers = getattr(response, "headers", {}) or {}
         content_type = str(headers.get("Content-Type", "")).lower()
         if "text/html" in content_type:
-            raise ValueError("FunPay вернул HTML вместо текстового файла.")
+            diagnostic = _safe_attachment_response_diagnostic(response)
+            raise ValueError(
+                "FunPay вернул HTML вместо текстового файла. "
+                f"Диагностика: {diagnostic}"
+            )
 
         content_length = str(headers.get("Content-Length", "")).strip()
         if content_length.isdigit() and int(content_length) > max_bytes:
