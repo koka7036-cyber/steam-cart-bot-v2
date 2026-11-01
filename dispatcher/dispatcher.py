@@ -64,7 +64,9 @@ def _labels(issue: Mapping[str, Any]) -> set[str]:
 
 def _is_protected_path(path: str) -> bool:
     normalized = path.replace("\\", "/").strip().lower()
-    if not normalized or normalized.startswith("/"):
+    if not normalized or normalized.startswith("/") or re.match(r"^[a-z]:", normalized):
+        # Allowlist entries must be repository-relative paths. Reject Unix
+        # absolute paths, UNC/rooted paths, and Windows drive-prefixed paths.
         return True
     parts = normalized.split("/")
     if any(part in {"..", ".git", ".github"} for part in parts):
