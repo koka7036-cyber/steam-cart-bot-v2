@@ -40,8 +40,9 @@ def test_monitor_awaits_async_listener_and_supports_private_router(monkeypatch):
                 return types.SimpleNamespace(username="seller-test", id="seller-id")
             return load_profile()
 
-        async def get_deals(self, *, count, statuses, direction, after_cursor):
+        async def get_deals(self, *, count, statuses=None, direction, after_cursor):
             assert count == 24
+            assert statuses is None
             assert after_cursor is None
             deal = types.SimpleNamespace(
                 id="open-deal-1",
@@ -49,8 +50,20 @@ def test_monitor_awaits_async_listener_and_supports_private_router(monkeypatch):
                 item=types.SimpleNamespace(id="one", name="One-set lot https://steamcommunity.com/tradeoffer/new/?partner=1&token=do-not-persist"),
                 chat=types.SimpleNamespace(id="chat-1"),
             )
+            confirmed_deal = types.SimpleNamespace(
+                id="confirmed-deal-2",
+                status="CONFIRMED",
+                item=types.SimpleNamespace(id="five", name="Five-set lot"),
+                chat=types.SimpleNamespace(id="chat-2"),
+            )
+            rolled_back_deal = types.SimpleNamespace(
+                id="rolled-back-deal-3",
+                status="ROLLED_BACK",
+                item=types.SimpleNamespace(id="five", name="Five-set lot"),
+                chat=types.SimpleNamespace(id="chat-3"),
+            )
             page_info = types.SimpleNamespace(has_next_page=False, end_cursor=None)
-            return types.SimpleNamespace(deals=[deal], page_info=page_info)
+            return types.SimpleNamespace(deals=[deal, confirmed_deal, rolled_back_deal], page_info=page_info)
 
     class FakePlayerokListener:
         def __init__(self, account):
@@ -71,7 +84,6 @@ def test_monitor_awaits_async_listener_and_supports_private_router(monkeypatch):
     types_package = types.ModuleType("PyPlayerokAPI.types")
     types_package.__path__ = []
     enums_module = types.ModuleType("PyPlayerokAPI.types.enums")
-    enums_module.ItemDealStatuses = types.SimpleNamespace(PAID="PAID", PENDING="PENDING")
     enums_module.ItemDealDirections = types.SimpleNamespace(OUT="OUT")
     monkeypatch.setitem(sys.modules, "PyPlayerokAPI", package)
     monkeypatch.setitem(sys.modules, "PyPlayerokAPI.account", account_module)
@@ -92,7 +104,7 @@ def test_monitor_awaits_async_listener_and_supports_private_router(monkeypatch):
     assert state["listener"] is not None
     assert "on_item_paid" in state["listener"]._router.handlers
     assert "on_new_message" in state["listener"]._router.handlers
-    assert len(state["events"]) == 1
+    assert len(state["events"]) == 3
     event = state["events"][0]
     assert event["is_initial_sync"] is True
     assert event["deal_id"] == "open-deal-1"
@@ -100,4 +112,78 @@ def test_monitor_awaits_async_listener_and_supports_private_router(monkeypatch):
     assert "tradeoffer/new" not in event["item_name"]
     assert "do-not-persist" not in event["item_name"]
     assert "trade_url" not in event
-    assert monitor.status()["last_sync_count"] == 1
+    assert monitor.status()["last_sync_count"] == 3
+    assert [event["status"] for event in state["events"]] == ["paid", "confirmed", "rolled_back"]
+
+
+def _install_fake_playerok_status_enums(monkeypatch):
+    package = types.ModuleType("PyPlayerokAPI")
+    package.__path__ = []
+    types_package = types.ModuleType("PyPlayerokAPI.types")
+    types_package.__path__ = []
+    enums_module = types.ModuleType("PyPlayerokAPI.types.enums")
+    enums_module.ItemDealDirections = types.SimpleNamespace(OUT="OUT")
+    monkeypatch.setitem(sys.modules, "PyPlayerokAPI", package)
+    monkeypatch.setitem(sys.modules, "PyPlayerokAPI.types", types_package)
+    monkeypatch.setitem(sys.modules, "PyPlayerokAPI.types.enums", enums_module)
+
+
+class FakePagedDealsAccount:
+    def __init__(self, page_info_values):
+        self.page_info_values = list(page_info_values)
+        self.calls = []
+
+    async def get_deals(self, *, count, statuses=None, direction, after_cursor):
+        assert count == 24
+        assert statuses is None
+        assert direction == "OUT"
+        self.calls.append(after_cursor)
+        index = len(self.calls) - 1
+        info = self.page_info_values[index]
+        return types.SimpleNamespace(
+            deals=[],
+            page_info=types.SimpleNamespace(
+                has_next_page=info[0],
+                end_cursor=info[1],
+            ),
+        )
+
+
+def test_initial_sync_reports_when_five_page_limit_truncates_results(monkeypatch):
+    _install_fake_playerok_status_enums(monkeypatch)
+    account = FakePagedDealsAccount(
+        [(True, f"cursor-{index}") for index in range(1, 6)]
+    )
+    monitor = PlayerokMonitor(token="test-token", one_set_item_id="one", five_set_item_id="five")
+
+    scanned, error = asyncio.run(monitor._sync_open_deals(account))
+
+    assert scanned == 0
+    assert error == "PageLimitReached"
+    assert len(account.calls) == 5
+
+
+def test_initial_sync_accepts_exactly_five_pages_when_last_page_is_final(monkeypatch):
+    _install_fake_playerok_status_enums(monkeypatch)
+    account = FakePagedDealsAccount(
+        [(True, f"cursor-{index}") for index in range(1, 5)] + [(False, None)]
+    )
+    monitor = PlayerokMonitor(token="test-token", one_set_item_id="one", five_set_item_id="five")
+
+    scanned, error = asyncio.run(monitor._sync_open_deals(account))
+
+    assert scanned == 0
+    assert error is None
+    assert len(account.calls) == 5
+
+
+def test_initial_sync_reports_missing_cursor_instead_of_silent_partial_sync(monkeypatch):
+    _install_fake_playerok_status_enums(monkeypatch)
+    account = FakePagedDealsAccount([(True, None)])
+    monitor = PlayerokMonitor(token="test-token", one_set_item_id="one", five_set_item_id="five")
+
+    scanned, error = asyncio.run(monitor._sync_open_deals(account))
+
+    assert scanned == 0
+    assert error == "PaginationCursorUnavailable"
+    assert len(account.calls) == 1
