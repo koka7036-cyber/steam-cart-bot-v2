@@ -1249,3 +1249,37 @@ def test_download_text_attachment_accepts_valid_plain_text_response():
             return Response()
 
     assert download_text_attachment(Session(), "https://funpay.com/file/12345") == trade_url
+
+
+
+def test_download_text_attachment_sends_chat_referer_for_authenticated_file_access():
+    from funpay_orders import download_text_attachment
+
+    expected_referer = "https://funpay.com/chat/?node=297865070"
+    observed = {}
+
+    class Response:
+        url = "https://funpay.com/file/12345"
+        status_code = 200
+        history = []
+        headers = {"Content-Type": "text/plain; charset=utf-8"}
+        content = b"plain text"
+
+        def raise_for_status(self):
+            pass
+
+        def close(self):
+            pass
+
+    class Session:
+        def get(self, url, **kwargs):
+            observed["url"] = url
+            observed.update(kwargs)
+            return Response()
+
+    assert download_text_attachment(
+        Session(),
+        "https://funpay.com/file/12345",
+        referer_url=expected_referer,
+    ) == "plain text"
+    assert observed["headers"]["Referer"] == expected_referer
