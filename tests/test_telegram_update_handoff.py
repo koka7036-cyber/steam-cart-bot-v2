@@ -264,6 +264,29 @@ def test_funpay_chat_diagnostic_is_admin_only_and_read_only():
     assert 'callback_data="fpdiag_help"' in source
 
 
+def test_funpay_watcher_attachment_detection_uses_valid_regex_without_file_download():
+    source = read_project_file("bot.py")
+    start = source.index("def funpay_check_unread_chats")
+    end = source.index("def handle_funpay_order_selection", start)
+    watcher = source[start:end]
+    assert 'r"""(?:chat-msg-(?:file|attachment)|data-type=["\']attachment["\'])"""' in watcher
+    assert 're.search(r"\\b(?:файл|вложение|attachment)\\b"' in watcher
+    assert "download_text_attachment(" not in watcher
+
+
+def test_funpay_diagnostic_separates_non_buyer_from_missing_trade_url():
+    source = read_project_file("bot.py")
+    start = source.index("def summarize_funpay_chat_diagnostics")
+    end = source.index("def funpay_offer_resolve_cmd", start)
+    diagnostic = source[start:end]
+    non_buyer = diagnostic.index('elif latest.get("author_kind") != "buyer":')
+    missing_url = diagnostic.index('elif not buyer_input.get("has_trade_url"):')
+    assert non_buyer < missing_url
+    non_buyer_branch = diagnostic[non_buyer:missing_url]
+    assert "последнее сообщение не подтверждено" in non_buyer_branch
+    assert "не найдена текстовая Steam Trade URL" not in non_buyer_branch
+
+
 def test_funpay_dashboard_explains_text_only_input_mode():
     source = read_project_file("bot.py")
     assert '"chat_only": "💬 Только текстовая trade-ссылка"' in source
