@@ -20,11 +20,11 @@ def test_cancelled_order_is_terminal_for_cold_start():
     assert funpay_cold_start_blockers({"order": {"status": "cancelled", "reservation": None}}) == []
 
 
-def test_cancelled_order_reservation_is_not_kept_as_open_stock_reservation():
+def test_cancelled_order_reservation_remains_hidden_until_ledger_is_cleared():
     cache = {"games": {"Game": {"Card": ["asset-1", "asset-2"]}}}
     orders = {"cancelled": {"status": "cancelled", "reservation": {"asset_ids": ["asset-1"]}}}
     filtered = filter_reserved_assets(cache, orders=orders)
-    assert filtered["games"]["Game"]["Card"] == ["asset-1", "asset-2"]
+    assert filtered["games"]["Game"]["Card"] == ["asset-2"]
 
 
 def test_cancelled_order_with_legacy_reservation_keeps_assets_hidden():
