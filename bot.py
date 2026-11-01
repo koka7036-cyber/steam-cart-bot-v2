@@ -17,7 +17,7 @@ import rsa
 import telebot
 from telebot import types, apihelper
 from runtime_paths import resolve_runtime_paths
-from admin_navigation import AdminNavigation
+from admin_navigation import AdminNavigation, cancel_password_prompt
 from steam_inventory import (
     SteamInventoryPaginationError,
     SteamInventoryRateLimitError,
@@ -3350,9 +3350,16 @@ def handle_all_messages(message):
     # Admin-only Steam login flow. Passwords are never intentionally persisted or logged.
     if message.chat.id == db.get("admin_id") and message.from_user and message.from_user.id == db.get("admin_id") and message.chat.type == "private":
         if message.chat.id in pending_steam_password_admin:
-            if text == "/cancel":
+            cancel_destination = cancel_password_prompt(admin_navigation, message.chat.id, text)
+            if cancel_destination is not None:
                 pending_steam_password_admin.discard(message.chat.id)
-                bot.send_message(message.chat.id, "Авторизация отменена.", reply_markup=build_steam_auth_keyboard())
+                notice = "Авторизация отменена."
+                keyboard = (
+                    build_steam_auth_keyboard()
+                    if cancel_destination == "steam_auth"
+                    else build_admin_keyboard()
+                )
+                bot.send_message(message.chat.id, notice, reply_markup=keyboard)
                 return
             pending_steam_password_admin.discard(message.chat.id)
             try:
