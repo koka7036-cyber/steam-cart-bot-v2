@@ -1787,14 +1787,18 @@ def update_inventory_cache():
             timeout=20,
         )
         if response.status_code == 429:
-            raise SteamInventoryRateLimitError("HTTP 429")
+            retry_after = response.headers.get("Retry-After") if hasattr(response, "headers") else None
+            raise SteamInventoryRateLimitError("HTTP 429", retry_after=retry_after)
         response.raise_for_status()
         return response.json()
 
     try:
         assets, descriptions = collect_inventory_pages(fetch_inventory_page)
-    except SteamInventoryRateLimitError:
-        return None, "Steam вернул ошибку 429. Подожди 2 минуты."
+    except SteamInventoryRateLimitError as e:
+        retry_after = e.retry_after_seconds
+        if retry_after is None:
+            return None, "Steam вернул HTTP 429. Подожди перед повторной проверкой; время Retry-After не указано."
+        return None, f"Steam вернул HTTP 429. Повтори проверку не раньше чем через {retry_after} сек."
     except SteamInventoryPaginationError as e:
         return None, str(e)
     except Exception as e:
