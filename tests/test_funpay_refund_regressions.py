@@ -1,4 +1,4 @@
-from funpay_orders import count_cancelled_orders, funpay_cold_start_blockers, filter_reserved_assets
+from funpay_orders import count_cancelled_orders, funpay_cold_start_blockers, filter_reserved_assets, funpay_release_refund_block_reason
 
 
 def test_dashboard_counts_refunded_and_cancelled_orders_once():
@@ -47,3 +47,36 @@ def test_cancelled_order_with_reservation_blocks_cold_start():
             "reservation": {"asset_ids": ["asset-1"]},
         }
     }) == [("cancelled_with_legacy_reservation", "cancelled")]
+
+
+
+def test_fprelease_refund_guard_blocks_refund_flag_without_offer_id():
+    record = {
+        "status": "review",
+        "funpay_refunded": True,
+        "reservation": {"asset_ids": ["123"]},
+    }
+    reason = funpay_release_refund_block_reason(record)
+    assert isinstance(reason, str) and "возврат FunPay" in reason
+
+
+def test_fprelease_refund_guard_blocks_all_refund_statuses():
+    for status in ("refund_review", "refunded", "refunded_cancelled"):
+        reason = funpay_release_refund_block_reason({
+            "status": status,
+            "funpay_refunded": False,
+            "reservation": {"asset_ids": ["123"]},
+        })
+        assert isinstance(reason, str) and reason.strip()
+
+
+def test_fprelease_refund_guard_allows_normal_unreffunded_reservation():
+    assert funpay_release_refund_block_reason({
+        "status": "reserved",
+        "funpay_refunded": False,
+        "reservation": {"asset_ids": ["123"]},
+    }) is None
+
+
+def test_fprelease_refund_guard_rejects_invalid_record():
+    assert funpay_release_refund_block_reason(None)
