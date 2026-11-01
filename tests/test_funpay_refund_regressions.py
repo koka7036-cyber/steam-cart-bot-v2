@@ -25,3 +25,31 @@ def test_cancelled_order_reservation_is_not_kept_as_open_stock_reservation():
     orders = {"cancelled": {"status": "cancelled", "reservation": {"asset_ids": ["asset-1"]}}}
     filtered = filter_reserved_assets(cache, orders=orders)
     assert filtered["games"]["Game"]["Card"] == ["asset-1", "asset-2"]
+
+
+def test_cancelled_order_with_legacy_reservation_keeps_assets_hidden():
+    cache = {"games": {"Game": {"Card": ["asset-1", "asset-2"]}}}
+    orders = {
+        "cancelled": {
+            "status": "cancelled",
+            "reservation": {"asset_ids": ["asset-1"]},
+        }
+    }
+
+    filtered = filter_reserved_assets(cache, orders=orders)
+
+    assert filtered["games"]["Game"]["Card"] == ["asset-2"]
+
+
+def test_cancelled_order_without_reservation_releases_no_additional_assets():
+    cache = {"games": {"Game": {"Card": ["asset-1", "asset-2"]}}}
+    orders = {
+        "cancelled": {
+            "status": "cancelled",
+            "reservation": None,
+        }
+    }
+
+    filtered = filter_reserved_assets(cache, orders=orders)
+
+    assert filtered["games"]["Game"]["Card"] == ["asset-1", "asset-2"]
