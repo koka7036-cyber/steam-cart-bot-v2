@@ -66,11 +66,21 @@ def test_cancelled_order_missing_reservation_field_blocks_cold_start():
     })
     assert blockers == [("cancelled_missing_reservation", "cancelled")]
 
-def test_cancelled_order_missing_reservation_field_blocks_cold_start():
+def test_active_order_without_reservation_quarantines_entire_stock():
+    cache = {"games": {"Game": {"Card": ["12345", "23456"]}}}
+    orders = {"sending_without_reservation": {"status": "sending", "reservation": None}}
+
+    filtered = filter_reserved_assets(cache, orders=orders)
+
+    assert filtered["games"] == {"Game": {"Card": []}}
+    assert filtered["total_cards"] == 0
+
+
+def test_active_order_without_reservation_blocks_cold_start():
     blockers = funpay_cold_start_blockers({
-        "cancelled_missing_reservation": {"status": "cancelled"}
+        "sending_without_reservation": {"status": "sending", "reservation": None}
     })
-    assert blockers == [("cancelled_missing_reservation", "cancelled")]
+    assert blockers == [("sending_without_reservation", "sending")]
 
 
 def test_fprelease_refund_guard_blocks_refund_flag_without_offer_id():
