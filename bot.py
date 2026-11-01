@@ -756,6 +756,7 @@ def send_funpay_chat_message(node_id, text):
 
 from order_parser import detect_order_sets_and_quantity, is_funpay_refund_notification, is_paid_order_notification
 from funpay_orders import (compact_funpay_text, decode_text_attachment, download_text_attachment, extract_order_number, extract_steam_trade_url, extract_text_attachment_href, filter_reserved_assets, find_open_order_for_chat, funpay_cold_start_blockers, funpay_input_signature, inventory_cache_freshness_error, mark_input_received, open_orders_for_chat, parse_funpay_history_payload, register_payment, message_signature, restore_reserved_assets, summarize_funpay_chat_diagnostics, voucher_redemption_block_reason, voucher_reset_block_reason)
+from funpay_orders import recover_interrupted_delivery_status
 from sales_analytics import summarize_sales
 from playerok_orders import (
     active_orders_for_chat,
@@ -817,13 +818,15 @@ def recover_interrupted_funpay_deliveries():
     with funpay_orders_lock:
         data = load_funpay_orders()
         for key, record in data["orders"].items():
-            if isinstance(record, dict) and record.get("status") == "sending":
-                record["status"] = "delivery_uncertain"
-                record["updated_at"] = int(time.time())
-                record.setdefault("notes", []).append(
-                    "Бот перезапустился во время отправки Steam-предложения; повторная отправка заблокирована во избежание дубля."
-                )
-                changed_keys.append(key)
+            if isinstance(record, dict):
+                recovered_status = recover_interrupted_delivery_status(record.get("status"))
+                if recovered_status != record.get("status"):
+                    record["status"] = recovered_status
+                    record["updated_at"] = int(time.time())
+                    record.setdefault("notes", []).append(
+                        "Бот перезапустился во время отправки Steam-предложения; повторная отправка заблокирована во избежание дубля."
+                    )
+                    changed_keys.append(key)
         if changed_keys:
             save_json(FP_ORDERS_FILE, data)
 
@@ -845,7 +848,6 @@ def recover_interrupted_funpay_deliveries():
             + ", ".join(changed_keys[:8])
             + ". Проверь историю предложений Steam вручную. Автоматический повтор заблокирован."
         )
-
 
 def restore_reservation_to_cache(reservation):
     """Atomically validate and restore a complete reservation after verified return."""
