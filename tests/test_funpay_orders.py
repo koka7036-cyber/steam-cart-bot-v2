@@ -1095,3 +1095,127 @@ def test_funpay_diagnostic_does_not_reuse_old_buyer_url_after_latest_refund():
     assert result["latest_buyer_input"]["has_trade_url"] is False
     assert "OLD_SECRET" not in repr(result)
 
+
+
+def test_filter_reserved_assets_quarantines_all_stock_for_malformed_order_reservation():
+    cache = {
+        "total_cards": 3,
+        "games": {"Game": {"Card A": ["12345", "23456"], "Card B": ["34567"]}},
+    }
+    orders = {
+        "damaged": {
+            "status": "reserved",
+            "reservation": {"asset_ids": "12345"},
+        }
+    }
+
+    filtered = filter_reserved_assets(cache, orders, {})
+
+    assert filtered["games"] == {"Game": {"Card A": [], "Card B": []}}
+    assert filtered["total_cards"] == 0
+    assert cache["games"]["Game"]["Card A"] == ["12345", "23456"]
+
+
+def test_filter_reserved_assets_quarantines_all_stock_for_malformed_voucher_reservation():
+    cache = {"games": {"Game": {"Card": ["12345", "23456"]}}}
+    vouchers = {
+        "code": {
+            "delivery_state": "uncertain",
+            "reserved_asset_ids": "12345",
+        }
+    }
+
+    filtered = filter_reserved_assets(cache, {}, vouchers)
+
+    assert filtered["games"] == {"Game": {"Card": []}}
+    assert filtered["total_cards"] == 0
+
+
+def test_filter_reserved_assets_keeps_valid_reservation_filtering_unchanged():
+    cache = {"games": {"Game": {"Card": ["12345", "23456"]}}}
+    orders = {
+        "valid": {
+            "status": "reserved",
+            "reservation": {"asset_ids": ["12345"]},
+        }
+    }
+
+    filtered = filter_reserved_assets(cache, orders, {})
+
+    assert filtered["games"]["Game"]["Card"] == ["23456"]
+    assert filtered["total_cards"] == 1
+
+def test_filter_reserved_assets_quarantines_duplicate_assets_across_orders():
+    cache = {
+        "total_cards": 2,
+        "games": {"Game": {"Card A": ["12345", "23456"]}},
+    }
+    orders = {
+        "order-a": {
+            "status": "reserved",
+            "reservation": {"asset_ids": ["12345"]},
+        },
+        "order-b": {
+            "status": "delivery_uncertain",
+            "reservation": {"asset_ids": ["12345"]},
+        },
+    }
+
+    filtered = filter_reserved_assets(cache, orders, {})
+
+    assert filtered["games"] == {"Game": {"Card A": []}}
+    assert filtered["total_cards"] == 0
+    assert cache["games"]["Game"]["Card A"] == ["12345", "23456"]
+
+
+def test_filter_reserved_assets_quarantines_order_voucher_asset_collision():
+    cache = {
+        "total_cards": 2,
+        "games": {"Game": {"Card": ["12345", "23456"]}},
+    }
+    orders = {
+        "order-a": {
+            "status": "reserved",
+            "reservation": {"asset_ids": ["12345"]},
+        }
+    }
+    vouchers = {
+        "voucher-b": {
+            "delivery_state": "uncertain",
+            "reserved_asset_ids": ["12345"],
+        }
+    }
+
+    filtered = filter_reserved_assets(cache, orders, vouchers)
+
+    assert filtered["games"] == {"Game": {"Card": []}}
+    assert filtered["total_cards"] == 0
+    assert cache["games"]["Game"]["Card"] == ["12345", "23456"]
+
+
+def test_filter_reserved_assets_quarantines_all_stock_for_invalid_order_container():
+    cache = {"games": {"Game": {"Card": ["12345", "23456"]}}}
+
+    filtered = filter_reserved_assets(cache, ["not-an-order-map"], {})
+
+    assert filtered["games"] == {"Game": {"Card": []}}
+    assert filtered["total_cards"] == 0
+
+
+def test_filter_reserved_assets_quarantines_all_stock_for_invalid_voucher_container():
+    cache = {"games": {"Game": {"Card": ["12345", "23456"]}}}
+
+    filtered = filter_reserved_assets(cache, {}, ["not-a-voucher-map"])
+
+    assert filtered["games"] == {"Game": {"Card": []}}
+    assert filtered["total_cards"] == 0
+
+
+def test_filter_reserved_assets_quarantines_non_dict_order_or_voucher_records():
+    cache = {"games": {"Game": {"Card": ["12345", "23456"]}}}
+
+    bad_order = filter_reserved_assets(cache, {"bad": "not-a-record"}, {})
+    bad_voucher = filter_reserved_assets(cache, {}, {"bad": None})
+
+    assert bad_order["total_cards"] == 0
+    assert bad_voucher["total_cards"] == 0
