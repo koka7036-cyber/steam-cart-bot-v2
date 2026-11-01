@@ -18,6 +18,7 @@ from typing import Any
 ACTIVE_INPUT_STATUSES = {"awaiting_trade_url", "manual_review", "needs_review"}
 FINAL_PLATFORM_STATUSES = {"confirmed", "rolled_back"}
 CLOSED_FOR_INPUT_STATUSES = {"confirmed", "rolled_back", "problem", "problem_resolved"}
+ADMIN_NOTIFICATION_STATUSES = {"sent", "confirmed", "rolled_back", "problem", "problem_resolved"}
 _URL_RE = re.compile(r"https?://[^\s<>]+", re.IGNORECASE)
 _SECRET_RE = re.compile(r"\b(?:token|access_token|session|cookie|jwt)\s*[=:]\s*[^\s&<>]+", re.IGNORECASE)
 _LOCK = RLock()
@@ -72,6 +73,16 @@ def normalize_platform_status(status: Any) -> str:
     return "unknown"
 
 
+ADMIN_NOTIFICATION_STATUSES = {"sent", "confirmed", "rolled_back", "problem", "problem_resolved"}
+
+
+def should_notify_admin_status_change(record: Any) -> bool:
+    """Return whether a persisted platform status change merits an admin notice."""
+    return (
+        isinstance(record, dict)
+        and normalize_platform_status(record.get("platform_status")) in ADMIN_NOTIFICATION_STATUSES
+    )
+
 def map_item_to_sets(item_id: Any, one_set_item_id: Any, five_set_item_id: Any) -> int | None:
     """Map a listing only by exact, unique IDs; never infer from a title."""
     listing_id = _safe_id(item_id)
@@ -101,6 +112,10 @@ def _initial_fulfillment(status: str, sets: int | None) -> str:
         return "awaiting_trade_url"
     if status == "sent":
         return "sent"
+    if status == "problem_resolved":
+        # The platform resolved the dispute, but delivery still requires an
+        # administrator to reconcile the prior offer and refund state.
+        return "manual_review"
     return "awaiting_payment"
 
 

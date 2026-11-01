@@ -9,6 +9,8 @@ from __future__ import annotations
 import copy
 import hashlib
 import html
+import json
+import os
 import re
 import time
 from html.parser import HTMLParser
@@ -16,6 +18,38 @@ from urllib.parse import parse_qs, urljoin, urlparse
 
 
 OPEN_STATUSES = {"awaiting_input", "input_received", "reserved", "review", "retry_required", "sending", "delivery_uncertain", "refund_review"}
+
+
+class FunPayLedgerIntegrityError(RuntimeError):
+    """Raised when the persisted FunPay order ledger cannot be trusted."""
+
+
+def load_funpay_order_ledger(path) -> dict:
+    """Read the FunPay order ledger without silently replacing corruption with an empty map."""
+    try:
+        with open(path, "r", encoding="utf-8") as ledger_file:
+            data = json.load(ledger_file)
+    except FileNotFoundError as exc:
+        if os.path.lexists(path):
+            raise FunPayLedgerIntegrityError(
+                "Путь к журналу заказов FunPay существует, но файл недоступен; выдача заблокирована."
+            ) from exc
+        return {"orders": {}}
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise FunPayLedgerIntegrityError(
+            "Журнал заказов FunPay не читается; резервирование и выдача заблокированы."
+        ) from exc
+    if not isinstance(data, dict) or not isinstance(data.get("orders"), dict):
+        raise FunPayLedgerIntegrityError(
+            "Структура журнала заказов FunPay повреждена; резервирование и выдача заблокированы."
+        )
+    if "refunds" in data and not isinstance(data.get("refunds"), dict):
+        raise FunPayLedgerIntegrityError(
+            "Раздел возвратов журнала FunPay повреждён; выдача заблокирована."
+        )
+    return data
+
+
 
 def count_cancelled_orders(orders) -> int:
     """Count cancelled/refunded FunPay orders once, including legacy refund flags."""
@@ -83,6 +117,31 @@ def restore_reserved_assets(cache: dict, reservation: dict) -> dict | None:
     if set(normalized_ids) != set(location_ids):
         return None
 
+    # If an asset ID is already cached at a different location, its ownership
+    # conflicts with this reservation. Do not silently re-home or duplicate it.
+    cached_locations = {}
+    for cached_game, cached_cards in games.items():
+        if not isinstance(cached_cards, dict):
+            return None
+        for cached_card, cached_ids in cached_cards.items():
+            if not isinstance(cached_ids, list):
+                return None
+            for cached_id in cached_ids:
+                normalized_cached_id = str(cached_id)
+                if not normalized_cached_id.isdigit():
+                    return None
+                previous = cached_locations.get(normalized_cached_id)
+                current = (cached_game, cached_card)
+                if previous is not None and previous != current:
+                    return None
+                cached_locations[normalized_cached_id] = current
+
+    for item in normalized_locations:
+        existing_location = cached_locations.get(item["asset_id"])
+        expected_location = (item["game"], item["card"])
+        if existing_location is not None and existing_location != expected_location:
+            return None
+
     restored = copy.deepcopy(cache)
     restored_games = restored["games"]
     for item in normalized_locations:
@@ -112,8 +171,14 @@ STEAM_TRADE_URL_RE = re.compile(
     r"https?://steamcommunity\.com/tradeoffer/new/\?[^\s<>\"'\\]+",
     re.IGNORECASE,
 )
-_ALLOWED_TEXT_EXTENSIONS = {".txt", ".text", ".csv", ".log"}
-_MAX_TEXT_ATTACHMENT_BYTES = 64 * 1024
+def has_unsupported_funpay_attachment(html_fragment: str) -> bool:
+    """Return True for image/file attachment markup; never extract content from it."""
+    fragment = str(html_fragment or "")
+    return bool(re.search(
+        r"""<img\b|chat-msg-(?:file|attachment)|data-type\s*=\s*(["'])attachment\1""",
+        fragment,
+        re.IGNORECASE,
+    ))
 
 
 def extract_steam_trade_url(text: str) -> str | None:
@@ -134,58 +199,6 @@ def extract_steam_trade_url(text: str) -> str | None:
             normalized.append(candidate)
     unique = list(dict.fromkeys(normalized))
     return unique[0] if len(unique) == 1 else None
-
-
-def _is_text_filename(value: str) -> bool:
-    if not value:
-        return False
-    path = urlparse(value).path
-    return any(path.lower().endswith(ext) for ext in _ALLOWED_TEXT_EXTENSIONS)
-
-
-def _is_trusted_funpay_url(value: str) -> bool:
-    parsed = urlparse(value)
-    host = (parsed.hostname or "").lower()
-    return parsed.scheme == "https" and (host == "funpay.com" or host.endswith(".funpay.com"))
-
-
-class _AttachmentLinkParser(HTMLParser):
-    """Collect only download links that look like in-chat file attachments."""
-
-    _VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
-
-    def __init__(self):
-        super().__init__(convert_charrefs=True)
-        self._stack = []
-        self.links = []
-
-    def handle_starttag(self, tag, attrs):
-        attrs = {key.lower(): (value or "") for key, value in attrs}
-        class_tokens = (attrs.get("class", "") + " " + attrs.get("data-type", "")).lower()
-        label = " ".join(attrs.get(key, "") for key in ("title", "aria-label", "data-name", "data-filename", "download"))
-        href = attrs.get("href", "")
-        inherited_context = any(item[1] for item in self._stack)
-        own_context = bool(re.search(r"(?:attachment|chat-msg-file|file-upload|file-attachment|chat-msg-item)", class_tokens))
-        filename_hint = _is_text_filename(label) or _is_text_filename(href)
-        is_file_link = tag.lower() == "a" and bool(href) and (
-            inherited_context or own_context or filename_hint or "download" in attrs
-        )
-        if is_file_link:
-            self.links.append((href, label or href))
-        if tag.lower() not in self._VOID_TAGS:
-            self._stack.append((tag.lower(), inherited_context or own_context))
-
-    def handle_startendtag(self, tag, attrs):
-        self.handle_starttag(tag, attrs)
-        if tag.lower() not in self._VOID_TAGS:
-            self.handle_endtag(tag)
-
-    def handle_endtag(self, tag):
-        tag = tag.lower()
-        for index in range(len(self._stack) - 1, -1, -1):
-            if self._stack[index][0] == tag:
-                del self._stack[index:]
-                return
 
 
 class _FunPaySystemAlertParser(HTMLParser):
@@ -462,53 +475,6 @@ def compact_funpay_text(value: str, max_chars: int | None = None) -> str:
     return text
 
 
-def download_text_attachment(session, attachment_url: str,
-                            max_bytes: int = _MAX_TEXT_ATTACHMENT_BYTES) -> str:
-    """Download one small, trusted FunPay text attachment and decode it safely.
-
-    Redirects outside FunPay, HTML/login pages, oversized files and binary data
-    are rejected before a trade URL can be extracted from the content.
-    """
-    if not _is_trusted_funpay_url(attachment_url):
-        raise ValueError("Ссылка на вложение находится вне домена FunPay.")
-
-    response = session.get(attachment_url, timeout=10, stream=True)
-    try:
-        response.raise_for_status()
-        final_url = getattr(response, "url", attachment_url) or attachment_url
-        if not _is_trusted_funpay_url(final_url):
-            raise ValueError("FunPay перенаправил скачивание на недоверенный домен.")
-
-        headers = getattr(response, "headers", {}) or {}
-        content_type = str(headers.get("Content-Type", "")).lower()
-        if "text/html" in content_type:
-            raise ValueError("FunPay вернул HTML вместо текстового файла.")
-
-        content_length = str(headers.get("Content-Length", "")).strip()
-        if content_length.isdigit() and int(content_length) > max_bytes:
-            raise ValueError(f"Текстовый файл превышает лимит {max_bytes} байт.")
-
-        payload = bytearray()
-        iterator = getattr(response, "iter_content", None)
-        if callable(iterator):
-            chunks = iterator(chunk_size=8192)
-        else:
-            chunks = (getattr(response, "content", b""),)
-
-        for chunk in chunks:
-            if not chunk:
-                continue
-            payload.extend(chunk)
-            if len(payload) > max_bytes:
-                raise ValueError(f"Текстовый файл превышает лимит {max_bytes} байт.")
-
-        return decode_text_attachment(bytes(payload), max_bytes=max_bytes)
-    finally:
-        close = getattr(response, "close", None)
-        if callable(close):
-            close()
-
-
 def extract_last_chat_message_fragment(html_document: str) -> str | None:
     """Return only the newest chat message wrapper, so an older URL cannot trigger delivery for a newer file."""
     parser = _LastChatMessageParser()
@@ -543,90 +509,93 @@ def extract_paid_order_events(html_document: str) -> list[tuple[str, str]]:
             events.append((fragment, text))
     return events
 
-def extract_text_attachment_href(html_fragment: str, base_url: str) -> str | None:
-    """Return one trusted FunPay-hosted text attachment URL from message HTML.
-
-    A single matching attachment is required. External hosts, unrelated links,
-    and ambiguous multiple attachments are rejected.
-    """
-    parser = _AttachmentLinkParser()
-    try:
-        parser.feed(html_fragment or "")
-        parser.close()
-    except Exception:
-        return None
-    candidates = []
-    for href, _label in parser.links:
-        resolved = urljoin(base_url, html.unescape(href.strip()))
-        if _is_trusted_funpay_url(resolved):
-            candidates.append(resolved)
-    unique = list(dict.fromkeys(candidates))
-    return unique[0] if len(unique) == 1 else None
-
-
-def decode_text_attachment(data: bytes, max_bytes: int = _MAX_TEXT_ATTACHMENT_BYTES) -> str:
-    """Decode a small plain-text attachment; reject oversized or binary files."""
-    if not isinstance(data, (bytes, bytearray)):
-        raise ValueError("Вложение не является двоичными данными.")
-    if not data:
-        raise ValueError("Текстовый файл пуст.")
-    if len(data) > max_bytes:
-        raise ValueError(f"Текстовый файл превышает лимит {max_bytes} байт.")
-    payload = bytes(data)
-    # UTF-16 must be detected by its BOM; otherwise CP1251's single-byte decoder
-    # can parse UTF-16/incorrect binary bytes into plausible-looking gibberish.
-    if payload.startswith((b"\xff\xfe", b"\xfe\xff")):
-        encodings = ("utf-16",)
-    else:
-        # Do not guess UTF-16 without a BOM; arbitrary binary bytes can decode as gibberish.
-        encodings = ("utf-8-sig", "cp1251")
-    last_error = None
-    for encoding in encodings:
-        try:
-            text = payload.decode(encoding)
-        except UnicodeDecodeError as exc:
-            last_error = exc
-            continue
-        if "\x00" in text:
-            continue
-        bad_controls = sum(1 for char in text if ord(char) < 32 and char not in "\r\n\t")
-        if bad_controls:
-            continue
-        if text.strip():
-            return text
-    raise ValueError("Не удалось прочитать файл как обычный текст UTF-8/UTF-16/Windows-1251.") from last_error
-
-
 def filter_reserved_assets(cache_data: dict, orders: dict | None = None,
                           vouchers: dict | None = None) -> dict:
-    """Return a stock cache with assets belonging to pending/uncertain offers removed."""
+    """Filter reserved assets; quarantine all stock when ownership is ambiguous."""
     if not isinstance(cache_data, dict):
         return {}
-    orders = orders if isinstance(orders, dict) else {}
-    vouchers = vouchers if isinstance(vouchers, dict) else {}
+
+    malformed_reservation = False
+    if orders is None:
+        orders = {}
+    elif not isinstance(orders, dict):
+        malformed_reservation = True
+        orders = {}
+    if vouchers is None:
+        vouchers = {}
+    elif not isinstance(vouchers, dict):
+        malformed_reservation = True
+        vouchers = {}
 
     reserved_ids = set()
+    reservation_required_statuses = {
+        "reserved", "sending", "delivery_uncertain", "offer_sent",
+        "offer_pending_confirmation", "refund_review",
+    }
+
+    def collect_asset_ids(raw_ids):
+        if not isinstance(raw_ids, list) or not raw_ids:
+            return None
+        normalized = []
+        for raw_id in raw_ids:
+            value = str(raw_id)
+            if not value.isdigit() or value in normalized:
+                return None
+            normalized.append(value)
+        return normalized
+
+    def register_reservation_assets(asset_ids):
+        nonlocal malformed_reservation
+        if any(asset_id in reserved_ids for asset_id in asset_ids):
+            malformed_reservation = True
+        reserved_ids.update(asset_ids)
+
     for record in orders.values():
-        if not isinstance(record, dict) or record.get("status") == "cancelled":
+        if not isinstance(record, dict) or "reservation" not in record:
+            malformed_reservation = True
             continue
-        reservation = record.get("reservation")
-        if isinstance(reservation, dict):
-            reserved_ids.update(
-                str(asset_id) for asset_id in reservation.get("asset_ids", [])
-                if str(asset_id)
-            )
+        reservation = record["reservation"]
+        status = str(record.get("status") or "").lower()
+        if reservation is None:
+            if status in reservation_required_statuses:
+                malformed_reservation = True
+            continue
+        if not isinstance(reservation, dict):
+            malformed_reservation = True
+            continue
+        asset_ids = collect_asset_ids(reservation.get("asset_ids"))
+        if asset_ids is None:
+            malformed_reservation = True
+            continue
+        register_reservation_assets(asset_ids)
 
     reserved_voucher_states = {"sending", "uncertain", "sent", "created_unconfirmed"}
     for voucher in vouchers.values():
         if not isinstance(voucher, dict):
+            malformed_reservation = True
             continue
-        if voucher.get("delivery_state") in reserved_voucher_states or (
-            voucher.get("used") and voucher.get("trade_offer_id")
-        ):
-            reserved_ids.update(
-                str(asset_id) for asset_id in voucher.get("reserved_asset_ids", [])
-                if str(asset_id)
-            )
+        has_reserved_delivery = (
+            voucher.get("delivery_state") in reserved_voucher_states
+            or (voucher.get("used") and voucher.get("trade_offer_id"))
+        )
+        if has_reserved_delivery:
+            asset_ids = collect_asset_ids(voucher.get("reserved_asset_ids"))
+            if asset_ids is None:
+                malformed_reservation = True
+                continue
+            register_reservation_assets(asset_ids)
+
+    if malformed_reservation:
+        quarantined = dict(cache_data)
+        games = cache_data.get("games", {})
+        quarantined_games = {}
+        if isinstance(games, dict):
+            for game_name, cards in games.items():
+                if isinstance(cards, dict):
+                    quarantined_games[game_name] = {card_name: [] for card_name in cards}
+        quarantined["games"] = quarantined_games
+        quarantined["total_cards"] = 0
+        return quarantined
 
     filtered = dict(cache_data)
     filtered_games = {}
@@ -649,7 +618,6 @@ def filter_reserved_assets(cache_data: dict, orders: dict | None = None,
         len(asset_ids) for cards in filtered_games.values() for asset_ids in cards.values()
     )
     return filtered
-
 
 def voucher_redemption_block_reason(voucher: dict) -> str | None:
     """Reject another redemption if a prior Steam offer may already exist."""
@@ -683,6 +651,22 @@ def voucher_reset_block_reason(voucher: dict) -> str | None:
     return None
 
 
+def funpay_release_refund_block_reason(record: dict) -> str | None:
+    """Prevent manual stock release while a FunPay refund is unresolved."""
+    if not isinstance(record, dict):
+        return "❌ Запись заказа повреждена или не найдена; резерв не снят."
+    if (
+        record.get("funpay_refunded") is True
+        or record.get("status") in {"refund_review", "refunded", "refunded_cancelled"}
+    ):
+        return (
+            "❌ По заказу зафиксирован возврат FunPay или требуется сверка возврата. "
+            "Команда /fprelease не может возвращать эти карточки в доступный склад; "
+            "сначала отдельно сверь фактическое состояние Steam и возврат FunPay."
+        )
+    return None
+
+
 def funpay_cold_start_blockers(orders: dict) -> list[tuple[str, str]]:
     """Return unresolved FunPay orders that must stay in the journal to protect reservations."""
     blockers = []
@@ -693,7 +677,10 @@ def funpay_cold_start_blockers(orders: dict) -> list[tuple[str, str]]:
             blockers.append((str(key), "invalid_record"))
             continue
         status = str(record.get("status", "unknown"))
-        if status not in {"completed", "cancelled", "refunded"} or record.get("reservation"):
+        reservation_is_cleared = "reservation" in record and record["reservation"] is None
+        # Missing reservation metadata is ambiguous and cannot prove that stock is free.
+        has_reservation = not reservation_is_cleared
+        if status not in {"completed", "cancelled", "refunded"} or has_reservation:
             blockers.append((str(key), status))
     return blockers
 
@@ -898,7 +885,6 @@ def summarize_funpay_chat_diagnostics(timeline: dict, orders: dict, node_id: str
     input_summary = {
         "message_id": None,
         "has_trade_url": False,
-        "has_text_attachment": False,
     }
     if isinstance(latest_buyer, dict):
         fragment = str(latest_buyer.get("html") or "")
@@ -907,12 +893,6 @@ def summarize_funpay_chat_diagnostics(timeline: dict, orders: dict, node_id: str
             "message_id": latest_buyer.get("id"),
             "has_trade_url": bool(
                 extract_steam_trade_url(text) or extract_steam_trade_url(fragment)
-            ),
-            "has_text_attachment": bool(
-                extract_text_attachment_href(
-                    fragment,
-                    f"https://funpay.com/chat/?node={node_id}",
-                )
             ),
         }
 
