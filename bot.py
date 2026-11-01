@@ -2744,7 +2744,6 @@ def funpay_chat_diagnostic_cmd(message):
         blockers.append("последнее событие системное; старую ссылку нельзя использовать повторно")
     elif latest.get("author_kind") != "buyer":
         blockers.append("последнее сообщение не подтверждено как сообщение покупателя")
-    elif not buyer_input.get("has_trade_url") and not buyer_input.get("has_text_attachment"):
         blockers.append("в последнем сообщении покупателя не найдена Steam-ссылка или текстовое вложение")
     if not open_orders:
         blockers.append("в журнале нет активного оплаченного заказа для этого чата")
