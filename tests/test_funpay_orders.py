@@ -1106,3 +1106,15 @@ def test_load_funpay_order_ledger_rejects_invalid_root_or_orders_container(tmp_p
         except FunPayLedgerIntegrityError:
             continue
         raise AssertionError(f"invalid ledger structure was accepted: {payload}")
+
+
+
+def test_load_funpay_order_ledger_rejects_directory_at_ledger_path(tmp_path):
+    path = tmp_path / "funpay_orders.json"
+    path.mkdir()
+    try:
+        load_funpay_order_ledger(path)
+    except FunPayLedgerIntegrityError:
+        pass
+    else:
+        raise AssertionError("a directory must not be treated as a missing ledger")
