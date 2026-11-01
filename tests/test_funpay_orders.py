@@ -1,5 +1,5 @@
 """Regression tests for safe FunPay order matching."""
-from funpay_orders import (extract_chat_message_fragments, extract_last_chat_message_fragment, extract_last_customer_message_fragment, extract_steam_trade_url, filter_reserved_assets, find_open_order_for_chat, funpay_cold_start_blockers, funpay_input_signature, inventory_cache_freshness_error, is_funpay_system_message, mark_input_received, register_payment, voucher_redemption_block_reason, voucher_reset_block_reason)
+from funpay_orders import (extract_chat_message_fragments, extract_last_chat_message_fragment, extract_last_customer_message_fragment, extract_steam_trade_url, filter_reserved_assets, find_open_order_for_chat, funpay_cold_start_blockers, funpay_input_signature, has_unsupported_funpay_attachment, inventory_cache_freshness_error, is_funpay_system_message, mark_input_received, register_payment, voucher_redemption_block_reason, voucher_reset_block_reason)
 from order_parser import detect_order_sets_and_quantity, is_funpay_refund_notification, is_paid_order_notification
 
 
@@ -12,6 +12,18 @@ def make_order(key, node_id="123", status="awaiting_input", updated_at=1):
         "input_kind": None,
         "input_received_at": None,
     }
+
+
+def test_funpay_image_attachment_is_detected_as_unsupported_input():
+    assert has_unsupported_funpay_attachment('<img src="/file/12345" alt="image">') is True
+
+
+def test_funpay_file_attachment_is_detected_as_unsupported_input():
+    assert has_unsupported_funpay_attachment('<div class="chat-msg-file">image.png</div>') is True
+
+
+def test_funpay_plain_text_message_is_not_marked_as_attachment():
+    assert has_unsupported_funpay_attachment('<div class="chat-message">Trade URL</div>') is False
 
 
 def test_extract_steam_trade_url_accepts_plain_text_message():
