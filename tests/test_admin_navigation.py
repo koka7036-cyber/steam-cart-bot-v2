@@ -65,3 +65,43 @@ def test_reopening_existing_parent_unwinds_nested_screen():
     nav.open(100, STEAM_AUTH)
     assert nav.open(100, SETTINGS) == SETTINGS
     assert nav.back(100) == MAIN
+
+
+def test_cancel_command_keeps_user_on_current_steam_screen():
+    from admin_navigation import cancel_password_prompt
+
+    nav = AdminNavigation()
+    nav.open(100, SETTINGS)
+    nav.open(100, STEAM_AUTH)
+    assert cancel_password_prompt(nav, 100, "/cancel") == STEAM_AUTH
+    assert nav.current(100) == STEAM_AUTH
+
+
+def test_back_command_during_password_prompt_returns_to_settings():
+    from admin_navigation import cancel_password_prompt
+
+    nav = AdminNavigation()
+    nav.open(100, SETTINGS)
+    nav.open(100, STEAM_AUTH)
+    assert cancel_password_prompt(nav, 100, "⬅️ Назад") == SETTINGS
+    assert nav.current(100) == SETTINGS
+
+
+def test_main_menu_command_during_password_prompt_resets_navigation():
+    from admin_navigation import cancel_password_prompt
+
+    nav = AdminNavigation()
+    nav.open(100, SETTINGS)
+    nav.open(100, STEAM_AUTH)
+    assert cancel_password_prompt(nav, 100, "🏠 Главное меню") == MAIN
+    assert nav.current(100) == MAIN
+
+
+def test_ordinary_password_text_is_not_treated_as_navigation():
+    from admin_navigation import cancel_password_prompt
+
+    nav = AdminNavigation()
+    nav.open(100, SETTINGS)
+    nav.open(100, STEAM_AUTH)
+    assert cancel_password_prompt(nav, 100, "not-a-menu-command") is None
+    assert nav.current(100) == STEAM_AUTH
