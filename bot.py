@@ -1459,10 +1459,13 @@ def funpay_check_unread_chats():
 
             has_file = bool(
                 last_message_html and re.search(
-                    r"(?:chat-msg-(?:file|attachment)|data-type=['\\\"]attachment['\\\"])",
-                    last_message_html, re.IGNORECASE
+                    r"""(?:chat-msg-(?:file|attachment)|data-type=["']attachment["'])""",
+                    last_message_html,
+                    re.IGNORECASE,
                 )
-            ) or re.search(r"\\b(?:файл|вложение|attachment)\\b", msg_preview, re.IGNORECASE)
+            ) or bool(
+                re.search(r"\b(?:файл|вложение|attachment)\b", msg_preview, re.IGNORECASE)
+            )
 
             if not latest_buyer_message or (not full_text.strip() and not has_file):
                 # A latest system alert is not buyer input. Cancel any stale in-memory
@@ -2748,6 +2751,7 @@ def funpay_chat_diagnostic_cmd(message):
         blockers.append("последнее событие системное; старую ссылку нельзя использовать повторно")
     elif latest.get("author_kind") != "buyer":
         blockers.append("последнее сообщение не подтверждено как сообщение покупателя")
+    elif not buyer_input.get("has_trade_url"):
         blockers.append("в последнем сообщении покупателя не найдена текстовая Steam Trade URL")
     if not open_orders:
         blockers.append("в журнале нет активного оплаченного заказа для этого чата")
