@@ -1038,6 +1038,7 @@ def test_filter_reserved_assets_quarantines_invalid_reservation_container_or_rec
         (["invalid-order-map"], {}),
         ({"bad": "not-a-record"}, {}),
         ({"bad": {"status": "reserved", "reservation": []}}, {}),
+        ({"missing-reservation": {"status": "cancelled"}}, {}),
         ({}, ["invalid-voucher-map"]),
         ({}, {"bad": None}),
         ({}, {"bad": {"delivery_state": "uncertain", "reserved_asset_ids": []}}),
