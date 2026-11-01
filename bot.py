@@ -755,7 +755,7 @@ def send_funpay_chat_message(node_id, text):
         return False, f"Ошибка отправки: {e}"
 
 from order_parser import detect_order_sets_and_quantity, is_funpay_refund_notification, is_paid_order_notification
-from funpay_orders import (compact_funpay_text, decode_text_attachment, download_text_attachment, extract_order_number, extract_steam_trade_url, extract_text_attachment_href, filter_reserved_assets, find_open_order_for_chat, funpay_cold_start_blockers, funpay_input_signature, inventory_cache_freshness_error, mark_input_received, open_orders_for_chat, parse_funpay_history_payload, register_payment, message_signature, restore_reserved_assets, summarize_funpay_chat_diagnostics, voucher_redemption_block_reason, voucher_reset_block_reason)
+from funpay_orders import (compact_funpay_text, decode_text_attachment, download_text_attachment, extract_order_number, extract_steam_trade_url, extract_text_attachment_href, filter_reserved_assets, find_open_order_for_chat, funpay_cold_start_blockers, funpay_input_signature, inventory_cache_asset_integrity_error, inventory_cache_freshness_error, mark_input_received, open_orders_for_chat, parse_funpay_history_payload, register_payment, message_signature, restore_reserved_assets, summarize_funpay_chat_diagnostics, voucher_redemption_block_reason, voucher_reset_block_reason)
 from sales_analytics import summarize_sales
 from playerok_orders import (
     active_orders_for_chat,
@@ -1871,6 +1871,8 @@ def update_inventory_cache():
     return cache_data, None
 
 def count_available_sets(cache_data):
+    if inventory_cache_asset_integrity_error(cache_data):
+        return 0, []
     games = cache_data.get("games", {})
     total_sets = 0
     details = []
@@ -3261,6 +3263,13 @@ def handle_show_cache(message):
     cache_data = load_json(CACHE_FILE, {})
     if not cache_data:
         bot.send_message(message.chat.id, "⚠️ Кэш еще не создан.")
+        return
+    integrity_error = inventory_cache_asset_integrity_error(cache_data)
+    if integrity_error:
+        bot.send_message(
+            message.chat.id,
+            "⛔ " + integrity_error + " Обнови кэш склада; подсчёт и выдача заблокированы."
+        )
         return
     total_sets, details = count_available_sets(cache_data)
 

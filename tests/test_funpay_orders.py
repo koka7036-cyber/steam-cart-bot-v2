@@ -374,6 +374,47 @@ def test_cold_start_allows_only_terminal_orders_without_reservations():
     }) == [("bad", "completed")]
 
 
+def test_inventory_cache_asset_integrity_accepts_unique_asset_ids():
+    from funpay_orders import inventory_cache_asset_integrity_error
+
+    assert inventory_cache_asset_integrity_error({
+        "games": {
+            "Game A": {"Card A": ["101"], "Card B": ["102"]},
+            "Game B": {"Card C": ["103"]},
+        }
+    }) is None
+
+
+def test_inventory_cache_asset_integrity_rejects_duplicate_across_cards():
+    from funpay_orders import inventory_cache_asset_integrity_error
+
+    error = inventory_cache_asset_integrity_error({
+        "games": {"Game": {"Card A": ["101"], "Card B": ["101"]}}
+    })
+
+    assert error and "101" in error
+
+
+def test_inventory_cache_asset_integrity_rejects_duplicate_within_one_card():
+    from funpay_orders import inventory_cache_asset_integrity_error
+
+    error = inventory_cache_asset_integrity_error({
+        "games": {"Game": {"Card A": ["101", "101"]}}
+    })
+
+    assert error and "101" in error
+
+
+def test_inventory_cache_freshness_guard_rejects_duplicate_asset_ids():
+    now = 1_800_000_000
+    error = inventory_cache_freshness_error({
+        "updated_at": now,
+        "games": {"Game": {"Card A": ["101"], "Card B": ["101"]}},
+    }, now=now)
+
+    assert error and "101" in error
+
+
 def test_inventory_cache_freshness_guard():
     now = 1_800_000_000
     assert inventory_cache_freshness_error({"updated_at": now, "games": {}}, now=now) is None
@@ -1094,4 +1135,88 @@ def test_funpay_diagnostic_does_not_reuse_old_buyer_url_after_latest_refund():
     assert result["latest_buyer_input"]["message_id"] is None
     assert result["latest_buyer_input"]["has_trade_url"] is False
     assert "OLD_SECRET" not in repr(result)
+
+def test_restore_reserved_assets_rejects_asset_already_present_at_different_location():
+    from funpay_orders import restore_reserved_assets
+
+    cache = {
+        "games": {
+            "Original Game": {"Original Card": ["101"]},
+            "Other Game": {"Other Card": []},
+        },
+        "total_cards": 1,
+    }
+    reservation = {
+        "asset_ids": ["101"],
+        "asset_locations": [
+            {"game": "Other Game", "card": "Other Card", "asset_id": "101"}
+        ],
+    }
+    before = {
+        "games": {
+            "Original Game": {"Original Card": ["101"]},
+            "Other Game": {"Other Card": []},
+        },
+        "total_cards": 1,
+    }
+
+    assert restore_reserved_assets(cache, reservation) is None
+    assert cache == before
+
+
+def test_restore_reserved_assets_rejects_existing_global_duplicate_asset_ids():
+    from funpay_orders import restore_reserved_assets
+
+    cache = {
+        "games": {
+            "Game A": {"Card A": ["101"]},
+            "Game B": {"Card B": ["101"]},
+        },
+        "total_cards": 2,
+    }
+    reservation = {
+        "asset_ids": ["102"],
+        "asset_locations": [
+            {"game": "Game C", "card": "Card C", "asset_id": "102"}
+        ],
+    }
+
+    assert restore_reserved_assets(cache, reservation) is None
+    assert cache["games"]["Game A"]["Card A"] == ["101"]
+    assert cache["games"]["Game B"]["Card B"] == ["101"]
+
+
+def test_restore_reserved_assets_keeps_same_location_restore_idempotent():
+    from funpay_orders import restore_reserved_assets
+
+    cache = {"games": {"Game": {"Card A": ["101"]}}, "total_cards": 1}
+    reservation = {
+        "asset_ids": ["101"],
+        "asset_locations": [
+            {"game": "Game", "card": "Card A", "asset_id": "101"}
+        ],
+    }
+
+    restored = restore_reserved_assets(cache, reservation)
+
+    assert restored is not None
+    assert restored["games"]["Game"]["Card A"] == ["101"]
+    assert restored["total_cards"] == 1
+
+def test_restore_reserved_assets_rejects_duplicate_asset_id_within_same_card_list():
+    from funpay_orders import restore_reserved_assets
+
+    cache = {
+        "games": {"Game": {"Card A": ["101", "101"]}},
+        "total_cards": 2,
+    }
+    reservation = {
+        "asset_ids": ["102"],
+        "asset_locations": [
+            {"game": "Game", "card": "Card B", "asset_id": "102"}
+        ],
+    }
+
+    assert restore_reserved_assets(cache, reservation) is None
+    assert cache["games"]["Game"]["Card A"] == ["101", "101"]
 

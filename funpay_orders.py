@@ -85,11 +85,35 @@ def restore_reserved_assets(cache: dict, reservation: dict) -> dict | None:
 
     restored = copy.deepcopy(cache)
     restored_games = restored["games"]
+
+    # An asset ID represents one Steam inventory item, so it must belong to
+    # exactly one game/card location in the cache. A prior refresh or damaged
+    # cache must not make a returned asset appear in two sets.
+    existing_locations = {}
+    for game_name, game_cards in restored_games.items():
+        if not isinstance(game_cards, dict):
+            return None
+        for card_name, card_assets in game_cards.items():
+            if not isinstance(card_assets, list):
+                return None
+            for raw_asset_id in card_assets:
+                asset_id = str(raw_asset_id)
+                if not asset_id.isdigit():
+                    return None
+                previous_location = existing_locations.get(asset_id)
+                if previous_location is not None:
+                    # Even a duplicate in the same card list inflates set counts.
+                    return None
+                existing_locations[asset_id] = (game_name, card_name)
+
     for item in normalized_locations:
         game_cards = restored_games.get(item["game"], {})
         if item["game"] in restored_games and not isinstance(game_cards, dict):
             return None
         if item["card"] in game_cards and not isinstance(game_cards[item["card"]], list):
+            return None
+        previous_location = existing_locations.get(item["asset_id"])
+        if previous_location is not None and previous_location != (item["game"], item["card"]):
             return None
 
     for item in normalized_locations:
@@ -698,11 +722,43 @@ def funpay_cold_start_blockers(orders: dict) -> list[tuple[str, str]]:
     return blockers
 
 
+def inventory_cache_asset_integrity_error(cache_data: dict) -> str | None:
+    """Reject malformed cache entries or repeated Steam asset IDs before counting or delivery."""
+    if not isinstance(cache_data, dict):
+        return "Кэш склада повреждён: неверный формат."
+    games = cache_data.get("games")
+    if not isinstance(games, dict):
+        return "Кэш склада повреждён: отсутствует список игр."
+    seen_asset_ids = set()
+    for game_name, cards in games.items():
+        if not isinstance(cards, dict):
+            return f"Кэш склада повреждён: некорректная структура игры {game_name!r}."
+        for card_name, asset_ids in cards.items():
+            if not isinstance(asset_ids, list):
+                return f"Кэш склада повреждён: некорректный список карточки {card_name!r}."
+            for raw_asset_id in asset_ids:
+                if isinstance(raw_asset_id, bool) or not isinstance(raw_asset_id, (str, int)):
+                    return "Кэш склада повреждён: некорректный Steam asset ID."
+                asset_id = str(raw_asset_id).strip()
+                if not asset_id.isdigit():
+                    return "Кэш склада повреждён: некорректный Steam asset ID."
+                if asset_id in seen_asset_ids:
+                    return (
+                        f"Кэш склада повреждён: Steam asset ID {asset_id} встречается "
+                        "более одного раза. Обнови кэш Steam перед выдачей."
+                    )
+                seen_asset_ids.add(asset_id)
+    return None
+
+
 def inventory_cache_freshness_error(cache_data: dict, now: float | None = None,
                                     max_age_seconds: int = 6 * 60 * 60) -> str | None:
     """Fail closed when available-card counts come from a missing, future or stale cache."""
     if not isinstance(cache_data, dict):
         return "Кэш склада повреждён. Обнови кэш склада перед выдачей."
+    integrity_error = inventory_cache_asset_integrity_error(cache_data)
+    if integrity_error:
+        return integrity_error
     updated_at = cache_data.get("updated_at")
     if not isinstance(updated_at, (int, float)) or isinstance(updated_at, bool) or updated_at <= 0:
         return "У кэша склада нет достоверного времени обновления. Нажми «🔄 Обновить кэш склада»."
