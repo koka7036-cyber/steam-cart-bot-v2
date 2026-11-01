@@ -648,9 +648,14 @@ def filter_reserved_assets(cache_data: dict, orders: dict | None = None,
 
     reserved_ids = set()
     for record in orders.values():
-        if not isinstance(record, dict) or record.get("status") == "cancelled":
+        if not isinstance(record, dict):
             continue
         reservation = record.get("reservation")
+        # A cancelled status is safe only after its reservation has been cleared.
+        # If a journal still carries reservation data, fail closed and keep those
+        # asset IDs unavailable until the record is reconciled.
+        if record.get("status") == "cancelled" and not reservation:
+            continue
         if isinstance(reservation, dict):
             reserved_ids.update(
                 str(asset_id) for asset_id in reservation.get("asset_ids", [])
