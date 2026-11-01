@@ -749,7 +749,6 @@ def summarize_funpay_chat_diagnostics(timeline: dict, orders: dict, node_id: str
     input_summary = {
         "message_id": None,
         "has_trade_url": False,
-        "has_text_attachment_removed": False,
     }
     if isinstance(latest_buyer, dict):
         fragment = str(latest_buyer.get("html") or "")
@@ -758,11 +757,6 @@ def summarize_funpay_chat_diagnostics(timeline: dict, orders: dict, node_id: str
             "message_id": latest_buyer.get("id"),
             "has_trade_url": bool(
                 extract_steam_trade_url(text) or extract_steam_trade_url(fragment)
-            ),
-            "has_text_attachment": bool(
-                    fragment,
-                    f"https://funpay.com/chat/?node={node_id}",
-                )
             ),
         }
 
