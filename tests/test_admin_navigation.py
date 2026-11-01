@@ -1,0 +1,46 @@
+from admin_navigation import AdminNavigation
+
+MAIN = "main"
+STOCK = "stock"
+FUNPAY = "funpay"
+PLAYEROK = "playerok"
+SALES = "sales"
+SETTINGS = "settings"
+STEAM_AUTH = "steam_auth"
+
+
+def test_open_section_and_return_to_main():
+    nav = AdminNavigation()
+    assert nav.current(100) == MAIN
+    assert nav.open(100, SETTINGS) == SETTINGS
+    assert nav.back(100) == MAIN
+    assert nav.current(100) == MAIN
+
+
+def test_nested_steam_auth_returns_to_settings_not_main():
+    nav = AdminNavigation()
+    nav.open(100, SETTINGS)
+    nav.open(100, STEAM_AUTH)
+    assert nav.back(100) == SETTINGS
+    assert nav.current(100) == SETTINGS
+    assert nav.back(100) == MAIN
+
+
+def test_back_from_top_level_section_returns_to_main():
+    nav = AdminNavigation()
+    nav.open(100, FUNPAY)
+    assert nav.back(100) == MAIN
+
+
+def test_chat_navigation_state_is_isolated():
+    nav = AdminNavigation()
+    nav.open(100, SETTINGS)
+    nav.open(200, FUNPAY)
+    assert nav.current(100) == SETTINGS
+    assert nav.current(200) == FUNPAY
+
+
+def test_unknown_section_does_not_mutate_navigation_state():
+    nav = AdminNavigation()
+    assert nav.open(100, "unknown") == MAIN
+    assert nav.current(100) == MAIN
