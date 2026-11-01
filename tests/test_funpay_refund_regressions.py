@@ -66,6 +66,12 @@ def test_cancelled_order_missing_reservation_field_blocks_cold_start():
     })
     assert blockers == [("cancelled_missing_reservation", "cancelled")]
 
+def test_cancelled_order_missing_reservation_field_blocks_cold_start():
+    blockers = funpay_cold_start_blockers({
+        "cancelled_missing_reservation": {"status": "cancelled"}
+    })
+    assert blockers == [("cancelled_missing_reservation", "cancelled")]
+
 
 def test_fprelease_refund_guard_blocks_refund_flag_without_offer_id():
     record = {
