@@ -110,16 +110,16 @@ def test_funpay_watcher_uses_trusted_history_and_bounds_telegram_notice():
     assert 'message_id=latest_buyer_message.get("id")' in watcher
     assert "extract_paid_order_events(" not in watcher
     assert "extract_last_customer_message_fragment(" not in watcher
-    assert "if not latest_buyer_message or (not full_text.strip() and not attachment_href and not has_file):" in watcher
+    assert "if not latest_buyer_message or (not full_text.strip() and not has_file):" in watcher
     assert "compact_funpay_text(safe_text, max_chars=900)" in watcher
-    assert "download_text_attachment(" in watcher
-    assert 'input_kind = "text_attachment"' in watcher
+    assert "download_text_attachment(" not in watcher
+    assert 'input_kind = "text_attachment"' not in watcher
     assert "seen_input_events[node_id] = input_signature" in watcher
     assert "is_funpay_refund_notification(payment_text)" in watcher
 
 
 
-def test_funpay_order_flow_supports_text_attachments_refunds_and_exact_admin_selection():
+def test_funpay_order_flow_supports_text_only_trade_urls_refunds_and_exact_admin_selection():
     source = read_project_file("bot.py")
     assert "def register_funpay_refund(" in source
     assert "restore_reservation_to_cache(reservation)" in source
@@ -127,7 +127,7 @@ def test_funpay_order_flow_supports_text_attachments_refunds_and_exact_admin_sel
     assert "selected_order_key=selected_order_key" in source
     assert 'call.data.startswith("fporderselect:")' in source
     assert "pending_funpay_input_selections" in source
-    assert "Вложение не распознано как текстовый файл FunPay" in source
+    assert "FunPay-вложение не поддерживается" in source
 
 
 def test_telegram_polling_uses_supported_sync_timeout_arguments():
@@ -220,7 +220,7 @@ def test_funpay_chat_diagnostic_is_admin_only_and_read_only():
     assert 'callback_data="fpdiag_help"' in source
 
 
-def test_funpay_dashboard_explains_text_attachment_input_mode():
+def test_funpay_dashboard_explains_text_only_input_mode():
     source = read_project_file("bot.py")
-    assert '"chat_only": "💬 Чат + 📎 текстовый файл"' in source
-    assert "небольшим текстовым файлом" in source
+    assert '"chat_only": "💬 Только текстовая trade-ссылка"' in source
+    assert "текстовую Steam Trade URL" in source
