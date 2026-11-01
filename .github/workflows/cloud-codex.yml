@@ -21,7 +21,7 @@ concurrency:
 
 jobs:
   codex:
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/fix/cloud-codex-untracked-patch-export-20261101'
     runs-on: macos-latest
     timeout-minutes: 20
     steps:
