@@ -2652,7 +2652,7 @@ def funpay_chat_diagnostic_cmd(message):
             "Последнее сообщение покупателя: "
             f"{'найдено' if buyer_input.get('message_id') else 'нет нового сообщения'}; "
             f"Steam-ссылка: {'да' if buyer_input.get('has_trade_url') else 'нет'}; "
-            f"текстовое вложение: {'да' if buyer_input.get('has_text_attachment') else 'нет'}"
+            f"текстовое вложение: {'да' if buyer_input.get('legacy_attachment_flag_removed') else 'нет'}"
         ),
     ])
 
