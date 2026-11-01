@@ -112,16 +112,40 @@ jobs:
           printf '%s\n' "$TASK" >> "$RUNNER_TEMP/task-prompt.txt"
           CODEX_API_KEY="$CODEX_API_KEY" codex exec --ephemeral --sandbox workspace-write - < "$RUNNER_TEMP/task-prompt.txt"
 
-      - name: Export proposed patch
+      - name: Export complete proposed patch
         if: always()
         run: |
           set -euo pipefail
-          git diff --binary > "$RUNNER_TEMP/proposed.patch"
-          if [[ -s "$RUNNER_TEMP/proposed.patch" ]]; then
-            cp "$RUNNER_TEMP/proposed.patch" proposed.patch
-          else
-            printf 'No changes produced.\n' > proposed.patch
+          patch_file="$RUNNER_TEMP/proposed.patch"
+          : > "$patch_file"
+
+          # Export tracked modifications and deletions without touching the index.
+          git diff --binary --no-ext-diff --no-textconv HEAD -- >> "$patch_file"
+
+          # git diff omits untracked files. Include only non-ignored regular files;
+          # NUL-delimited paths safely handle spaces and shell metacharacters.
+          while IFS= read -r -d '' path; do
+            if [[ -f "$path" && ! -L "$path" ]]; then
+              set +e
+              git diff --no-index --binary --no-ext-diff --no-textconv -- /dev/null "$path" >> "$patch_file"
+              diff_status=$?
+              set -e
+              if [[ "$diff_status" -gt 1 ]]; then
+                echo "Could not export untracked file: $path" >&2
+                exit "$diff_status"
+              fi
+            fi
+          done < <(git ls-files --others --exclude-standard -z)
+
+          if [[ ! -s "$patch_file" ]]; then
+            printf 'No changes produced.\\n' > "$patch_file"
           fi
+
+          # Fail closed if the generated patch cannot be applied cleanly.
+          if grep -q '^diff --git ' "$patch_file"; then
+            git apply --check --binary "$patch_file"
+          fi
+          cp "$patch_file" proposed.patch
 
       - name: Upload proposed patch for human review
         if: always()
