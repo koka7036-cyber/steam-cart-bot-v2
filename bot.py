@@ -2429,6 +2429,14 @@ def build_admin_keyboard():
         markup.add("⚙️ Настройки")
     return markup
 
+def build_steam_auth_keyboard():
+    """Build the nested Steam authorization keyboard without changing navigation state."""
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    markup.add("🔑 Войти в Steam", "📡 Статус Steam")
+    markup.add(ADMIN_BACK_MENU, ADMIN_MAIN_MENU)
+    return markup
+
+
 def build_customer_keyboard():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add("🔗 Где взять трейд-ссылку?", "❓ Как отправить трейд-ссылку?")
@@ -3344,7 +3352,7 @@ def handle_all_messages(message):
         if message.chat.id in pending_steam_password_admin:
             if text == "/cancel":
                 pending_steam_password_admin.discard(message.chat.id)
-                bot.send_message(message.chat.id, "Авторизация отменена.", reply_markup=build_admin_keyboard())
+                bot.send_message(message.chat.id, "Авторизация отменена.", reply_markup=build_steam_auth_keyboard())
                 return
             pending_steam_password_admin.discard(message.chat.id)
             try:
@@ -3362,24 +3370,22 @@ def handle_all_messages(message):
             except Exception:
                 pass
             if session_value:
-                bot.send_message(message.chat.id, "✅ Steam авторизован. Сессия сохранена локально; при обычном перезапуске пароль повторно вводить не потребуется.", reply_markup=build_admin_keyboard())
+                bot.send_message(message.chat.id, "✅ Steam авторизован. Сессия сохранена локально; при обычном перезапуске пароль повторно вводить не потребуется.", reply_markup=build_steam_auth_keyboard())
             else:
-                bot.send_message(message.chat.id, "❌ " + (auth_error or "Авторизация не завершена.") + "\nПодтверди запрос в Steam Guard, если он появился, затем попробуй снова.", reply_markup=build_admin_keyboard())
+                bot.send_message(message.chat.id, "❌ " + (auth_error or "Авторизация не завершена.") + "\nПодтверди запрос в Steam Guard, если он появился, затем попробуй снова.", reply_markup=build_steam_auth_keyboard())
             return
         if text == "🔐 Авторизация Steam":
             sess = load_json(SESSION_FILE, {})
             valid = bool(sess.get("steamLoginSecure") and time.time() - sess.get("timestamp", 0) < 43200)
             admin_navigation.open(message.chat.id, "steam_auth")
-            markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-            markup.add("🔑 Войти в Steam", "📡 Статус Steam")
-            markup.add("⬅️ Назад", "🏠 Главное меню")
+            markup = build_steam_auth_keyboard()
             bot.send_message(message.chat.id, "🔐 <b>Авторизация Steam</b>\nСессия: " + ("действует по локальному таймеру" if valid else "нет действующей локальной сессии") + "\nПароль запрашивается только по команде входа. Не отправляй пароль в группы; бот попробует удалить сообщение сразу после получения. Удаление не гарантировано.", reply_markup=markup, parse_mode="HTML")
             return
         if text == "📡 Статус Steam":
             sess = load_json(SESSION_FILE, {})
             valid = bool(sess.get("steamLoginSecure") and time.time() - sess.get("timestamp", 0) < 43200)
             asf_ok, _ = asf_command("status")
-            bot.send_message(message.chat.id, "Steam-сессия: " + ("по таймеру активна" if valid else "отсутствует или устарела") + "\nЛогин задан: " + ("да" if STEAM_LOGIN else "нет") + "\nASF: " + ("доступен" if asf_ok else "не отвечает/не запущен"), reply_markup=build_admin_keyboard())
+            bot.send_message(message.chat.id, "Steam-сессия: " + ("по таймеру активна" if valid else "отсутствует или устарела") + "\nЛогин задан: " + ("да" if STEAM_LOGIN else "нет") + "\nASF: " + ("доступен" if asf_ok else "не отвечает/не запущен"), reply_markup=build_steam_auth_keyboard())
             return
         if text == "🔑 Войти в Steam":
             pending_steam_password_admin.add(message.chat.id)
